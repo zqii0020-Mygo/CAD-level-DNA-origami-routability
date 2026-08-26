@@ -1,0 +1,6 @@
+numpy>=1.26
+networkx>=3.0
+# routing / graph stage
+torch>=2.0
+# optional, install when the GNN stage starts:
+# torch_geometric
