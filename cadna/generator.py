@@ -48,6 +48,46 @@ def _rect_cross_section(n_rows: int, n_cols: int) -> list[Site]:
     return [(r, c) for r in range(n_rows) for c in range(n_cols)]
 
 
+def _largest_patch(lat: Lattice, sites: set[Site]) -> list[Site]:
+    """The biggest lattice-connected component of a set of sites."""
+    remaining = set(sites)
+    best: list[Site] = []
+    while remaining:
+        seed = min(remaining)
+        comp, q = {seed}, deque([seed])
+        remaining.discard(seed)
+        while q:
+            cur = q.popleft()
+            for nb in lat.neighbors(*cur):
+                if nb in remaining:
+                    remaining.discard(nb)
+                    comp.add(nb)
+                    q.append(nb)
+        if len(comp) > len(best):
+            best = sorted(comp)
+    return best
+
+
+def _repair_cross_section(lat: Lattice, sites: list[Site]) -> list[Site]:
+    """Drop dangling helices, then keep the largest connected patch.
+
+    A helix with fewer than two in-bundle neighbours cannot have a scaffold
+    cycle pass through it, and a CAD tool would not let you place one.  This
+    matters most in the honeycomb lattice, where the third neighbour alternates
+    up/down with parity, so a plain rectangular (row, col) block grows dangling
+    corners.  Only applied to bundles that have no mates -- a wireframe edge
+    gets its second and third connections from its vertices instead.
+    """
+    cur = set(sites)
+    while len(cur) > 2:
+        dangling = {s for s in cur if sum(nb in cur for nb in lat.neighbors(*s)) < 2}
+        if not dangling:
+            break
+        cur -= dangling
+    patch = _largest_patch(lat, cur) if len(cur) >= 2 else []
+    return patch if len(patch) >= 2 else _largest_patch(lat, set(sites))
+
+
 def _compact_cross_section(lat: Lattice, k: int) -> list[Site]:
     """k lattice sites grown breadth-first from the origin (compact packing)."""
     seen = {(0, 0)}
@@ -227,6 +267,13 @@ def _build_solid(bd: _Builder) -> None:
     if p.fill < 1.0:
         keep = [s for s in sites if bd.rng.random() < p.fill]
         sites = keep or sites[:1]
+    if p.repair_cross_section and len(sites) > 2:
+        # A single row of helices is a lattice path, so the repair would eat it
+        # from both ends down to nothing.  Keep the repair only where it tidies
+        # a cross-section rather than destroying it.
+        fixed = _repair_cross_section(bd.lat, sites)
+        if len(fixed) >= 3 and len(fixed) >= 0.6 * len(sites):
+            sites = fixed
     axis = np.array([0.0, 0.0, 1.0])
     p0 = np.zeros(3)
     p1 = p0 + axis * (p.length_bp * RISE_PER_BP)

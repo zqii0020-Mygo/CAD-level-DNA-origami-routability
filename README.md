@@ -14,27 +14,36 @@ CAD geometry → heterogeneous graph → GNN → risk prediction → route or no
 ## Pipeline
 
 ```
-CAD params                       cadna/params.py      [done]
-   -> Feature / Bundle / Cylinder    cadna/generator.py   [done]
-   -> cylinder adjacency             cadna/adjacency.py   [done]
-   -> candidate crossovers           cadna/adjacency.py   [done]
-   -> mate constraints               cadna/generator.py   [done]
-   -> routing precheck               cadna/precheck.py    [next]
-   -> scaffold routing (DFS)         cadna/routing.py     [next]
-   -> result record                  labels               [next]
-   -> graph extraction               cadna/graph.py       [next]
-   -> graph + label on disk          dataset              [next]
-   -> surrogate model                models/              [next]
+CAD params                          cadna/params.py      [done]
+   -> Feature / Bundle / Cylinder   cadna/generator.py   [done]
+   -> cylinder adjacency            cadna/adjacency.py   [done]
+   -> candidate crossovers          cadna/adjacency.py   [done]
+   -> mate constraints              cadna/generator.py   [done]
+   -> port graph                    cadna/linkgraph.py   [done]
+   -> routing precheck              cadna/precheck.py    [done]
+   -> scaffold routing (DFS)        cadna/routing.py     [done]
+   -> staple + export gates         cadna/routing.py     [done]
+   -> label record                  labels.csv           [done]
+   -> graph extraction              cadna/graph.py       [next]
+   -> graph + label on disk         dataset              [next]
+   -> surrogate model               models/              [next]
 ```
 
 ## Prediction targets
 
-| target | type | source |
-|---|---|---|
-| routing feasibility | binary | did the router return a valid route |
-| Hamilton-cycle availability | binary | does the cylinder/crossover topology admit a Hamiltonian-style route |
-| failure diagnosis | multi-class | pairability / Hamilton / geometry / timeout / staple routing / export |
-| search cost | regression | DFS node expansions, wall time, timeout flag |
+| target | column | type | source |
+|---|---|---|---|
+| routing feasibility | `routable` | binary | the whole precheck → route → staple → export chain succeeded |
+| Hamilton-cycle availability | `hamilton` | binary, `None` on timeout | a Hamiltonian cycle exists over the port graph |
+| …allowing a free scaffold closure | `hamilton_path` | binary, `None` on timeout | a Hamiltonian *path* exists (see below) |
+| failure diagnosis | `failure_class` | multi-class | `pairability` / `hamilton` / `geometry` / `timeout` / `staple_routing` / `export` / `scaffold_length` |
+| search cost | `nodes_expanded`, `backtracks`, `elapsed_s`, `timeout` | regression | the DFS budget counters |
+
+`scaffold_length` is not one of the original six classes. It is kept separate
+because it is frequent and physically distinct: the topology routes fine, there
+is simply not enough scaffold. `staple_ok` / `export_ok` / `scaffold_ok` are
+also kept as their own columns, so a design that fails several gates at once
+does not lose that information to the single primary `failure_class`.
 
 ## Layout
 
@@ -48,44 +57,81 @@ cadna/
   generator.py   CADParams -> Design, four shape families
   adjacency.py   cylinder contacts and candidate-crossover enumeration
   io.py          JSON / JSON.gz (de)serialisation
+  linkgraph.py   the port graph the router searches, and the parity invariant
+  precheck.py    cheap exact obstructions + the structural feature vector
+  routing.py     the DFS, the staple and export gates, and the label record
 scripts/
-  gen_designs.py sample N designs into a directory + index.csv
+  gen_designs.py    sample N designs into a directory + index.csv
+  route_designs.py  label a directory of designs -> labels.csv
 tests/
   test_generator.py
+  test_routing.py
 ```
 
 ## Usage
 
 ```bash
 pip install -r requirements.txt
-python tests/test_generator.py                          # 11 checks, no pytest needed
-python scripts/gen_designs.py --n 500 --out data/designs_v0
+python tests/test_generator.py && python tests/test_routing.py   # no pytest needed
+python scripts/gen_designs.py   --n 1000 --out data/designs_v0
+python scripts/route_designs.py --designs data/designs_v0
 ```
 
 ```python
-from cadna import CADParams, sample_params, generate, save_design
+from cadna import CADParams, sample_params, generate, evaluate, save_design
 
 d = generate(sample_params(seed=42))                    # random point of the space
 d = generate(CADParams(shape="polyhedron", polyhedron="cube",
                        lattice="honeycomb", helices_per_edge=2, edge_bp=63))
 print(d.summary())
 save_design(d, "data/cube.json.gz")
+
+lab = evaluate(d)
+print(lab.routable, lab.hamilton, lab.failure_class, lab.nodes_expanded)
 ```
+
+## The routing model
+
+The scaffold enters a helix at one end and leaves at the other, so every
+cylinder has two **ports**, `lo` and `hi`, and traversing one always flips
+lo ↔ hi. Consecutive cylinders are joined by a **link**:
+
+- a **crossover** joins two helices of the same bundle. They share a bp frame,
+  so a crossover near the low end of one is near the low end of the other:
+  crossovers join *equal* ports.
+- a **mate** joins helix ends of different bundles at a CAD vertex. Geometry
+  decides the ports, so mates can join lo–hi.
+
+A scaffold route is a Hamiltonian cycle alternating traversals and links.
+
+**The parity invariant.** An equal-port link flips the entry port; a lo–hi link
+does not; closing the cycle requires the entry port to come back to where it
+started. So a valid route uses an even number of equal-port links — and a design
+whose links are all crossovers (any single-bundle brick or plate) has no route
+at all when its helix count is odd. That is the classic "odd number of helices"
+obstruction, and it falls out of the model rather than being special-cased.
+`tests/test_routing.py` checks the DFS against it directly.
+
+**Cycle vs path.** A single row of helices is a lattice *path*, so it has no
+Hamiltonian cycle — yet real flat sheets route fine, because a circular scaffold
+closes itself over a long distance without needing a crossover (this is how a
+Rothemund rectangle closes). `hamilton` is the strict cycle question;
+`hamilton_path` allows that one free closure, implemented by adding a virtual
+cylinder whose ports reach every real port. Both are reported, so the modelling
+choice stays open.
 
 ## Shape families
 
 | shape | bundles | mates | regime |
 |---|---|---|---|
 | `brick` | 1 | none | multi-layer block, crossover rich |
-| `plate` | 1 | none | 1-2 layer sheet, sparse and long |
+| `plate` | 1 | none | 1–3 layer sheet, sparse and long |
 | `polygon_ring` | N | vertex | planar wireframe |
-| `polyhedron` | 6-12 | vertex | 3D wireframe (tetra / octa / cube), the DAEDALUS/ATHENA regime |
+| `polyhedron` | 6–12 | vertex | 3D wireframe (tetra / octa / cube), the DAEDALUS/ATHENA regime |
 
-The sampler deliberately emits degenerate designs -- odd helix counts per edge,
-punched-out cross-sections, scaffolds far too short -- because those are the
-negative labels the surrogate has to learn. In a 300-design batch roughly 17%
-overrun the scaffold and 5% have unpairable helix ends before routing is even
-attempted.
+The sampler deliberately emits degenerate designs — odd helix counts per edge,
+punched-out cross-sections, scaffolds far too short — because those are the
+negative labels the surrogate has to learn.
 
 ## Crossover rule
 
@@ -93,12 +139,32 @@ A crossover occupies the **same bp index on both helices**, so the phase offset
 must be symmetric in the two lattice sites. `lattice.py` derives it from the
 direction of the inter-helix vector:
 
-- honeycomb: 3 neighbour axes 120 deg apart, `step = 21` -> offsets `{0, 7, 14}`
-- square: 2 axes 90 deg apart with parity-alternating helix phase, `step = 32`
-  -> offsets `{0, 8, 16, 24}`
+- honeycomb: 3 neighbour axes 120° apart, `step = 21` → offsets `{0, 7, 14}`
+- square: 2 axes 90° apart with parity-alternating helix phase, `step = 32`
+  → offsets `{0, 8, 16, 24}`
 
 The tables are isolated in `Lattice.crossover_offset` so they can be swapped for
 the exact caDNAno lookup tables without touching anything downstream.
+
+## Cross-section repair
+
+In the honeycomb lattice the third neighbour alternates up/down with parity, so
+a plain rectangular `(row, col)` block grows **dangling corner helices** with a
+single neighbour — which no scaffold cycle can pass through. Left alone this
+made ~35% of bricks and plates trivially unroutable for an uninteresting reason.
+The generator therefore drops dangling helices and keeps the largest connected
+patch, exactly as a CAD tool would (a 3×3 honeycomb rectangle becomes a clean
+6-helix ring). The repair is skipped when it would destroy the design rather
+than tidy it — a single row of helices is a lattice path and would be eaten from
+both ends — and `repair_cross_section=False` keeps the dangling-helix class in
+the dataset as a deliberate minority.
+
+## Baselines to beat
+
+Every hard precheck in `precheck.py` is an *exact* obstruction — dead port,
+disconnected, degree < 2, cut vertex, parity — so a surrogate that only
+reproduces them has learned nothing. The interesting designs are the ones that
+pass the precheck and are then decided by search, or that time out.
 
 ## Known simplifications
 
@@ -109,5 +175,11 @@ the exact caDNAno lookup tables without touching anything downstream.
 - Bundle cross-section frames use an arbitrary perpendicular basis; real tools
   align the cross-section to the incident face normal. This affects the 3D
   coordinates of crossovers, not their bp indices or the graph topology.
-- Scaffold/staple nick placement, sequence assignment and export are out of
-  scope until the routing stage lands.
+- Mates are treated as *available* links, not mandatory ones: the scaffold may
+  use a vertex connection or leave it to the staples.
+- Staple routing is a gate, not a router. A helix stretch longer than
+  `MAX_STAPLE_SPAN_BP` (49 bp) with no free crossover fails, but staples are
+  never actually laid out. Sequence assignment and real file export are still
+  out of scope.
+- Each cylinder is traversed by the scaffold exactly once, end to end. Real
+  routers may split a helix across several scaffold passes.

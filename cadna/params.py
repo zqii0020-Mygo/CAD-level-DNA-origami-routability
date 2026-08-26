@@ -32,6 +32,7 @@ class CADParams:
     length_bp: int = 84
     fill: float = 1.0          # fraction of lattice sites kept (<1 punches holes)
     stagger_bp: int = 0        # max random inset of each helix end
+    repair_cross_section: bool = True   # drop dangling helices (see generator)
 
     # --- wireframe shapes (polygon_ring / polyhedron) ---------------------
     n_sides: int = 4           # polygon_ring only
@@ -69,7 +70,7 @@ def sample_params(seed: int, shape: str | None = None, lattice: str | None = Non
 
     if shape in ("brick", "plate"):
         if shape == "plate":
-            p.n_rows = rng.randint(1, 2)
+            p.n_rows = rng.choice([1, 2, 2, 3])
             p.n_cols = rng.randint(4, 12)
         else:
             p.n_rows = rng.randint(2, 5)
@@ -79,6 +80,8 @@ def sample_params(seed: int, shape: str | None = None, lattice: str | None = Non
         p.length_bp = n_periods * step + rng.choice([0, 0, 0, rng.randint(1, step - 1)])
         p.fill = rng.choice([1.0, 1.0, 1.0, 0.9, 0.75, 0.6])
         p.stagger_bp = rng.choice([0, 0, 0, step // 3, step])
+        # a minority skip the repair, keeping the "dangling helix" class alive
+        p.repair_cross_section = rng.random() < 0.85
     else:
         if shape == "polygon_ring":
             p.n_sides = rng.randint(3, 8)

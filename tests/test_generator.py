@@ -42,15 +42,47 @@ def test_neighbors_are_at_the_interhelix_distance():
                     assert abs(d - lat.interhelix) < 1e-9, (lat.name, (row, col), nb, d)
 
 
+def _block(**kw):
+    base = dict(shape="brick", lattice="honeycomb", n_rows=3, n_cols=3,
+                length_bp=63, fill=1.0, stagger_bp=0, crossover_end_margin_bp=0)
+    base.update(kw)
+    return generate(CADParams(**base))
+
+
 def test_honeycomb_block_adjacency_count():
-    """3x3 honeycomb block: 6 horizontal + 3 vertical lattice contacts."""
-    p = CADParams(shape="brick", lattice="honeycomb", n_rows=3, n_cols=3,
-                  length_bp=63, fill=1.0, stagger_bp=0, crossover_end_margin_bp=0)
-    d = generate(p)
+    """Raw 3x3 honeycomb block: 6 horizontal + 3 vertical lattice contacts."""
+    d = _block(repair_cross_section=False)
     assert len(d.cylinders) == 9
     intra = [a for a in d.adjacencies if a.kind == "intra"]
     assert len(intra) == 9
     assert all(a.overlap_bp == 63 for a in intra)
+
+
+def test_cross_section_repair_removes_dangling_helices():
+    """A 3x3 honeycomb rectangle has dangling corners; repaired it is a 6-ring."""
+    raw = _block(repair_cross_section=False)
+    deg = {c.id: 0 for c in raw.cylinders}
+    for a in raw.adjacencies:
+        deg[a.cyl_a] += 1
+        deg[a.cyl_b] += 1
+    assert min(deg.values()) == 1, "the raw rectangle should have dangling corners"
+
+    fixed = _block(repair_cross_section=True)
+    assert len(fixed.cylinders) == 6
+    assert len(fixed.adjacencies) == 6
+    deg = {c.id: 0 for c in fixed.cylinders}
+    for a in fixed.adjacencies:
+        deg[a.cyl_a] += 1
+        deg[a.cyl_b] += 1
+    assert set(deg.values()) == {2}, "repaired honeycomb block should be a ring"
+
+
+def test_repair_never_applies_to_wireframe_edges():
+    """A 2-helix edge would be wiped by the repair; its mates carry it instead."""
+    p = CADParams(shape="polyhedron", polyhedron="tetrahedron", lattice="honeycomb",
+                  helices_per_edge=2, edge_bp=63, repair_cross_section=True)
+    d = generate(p)
+    assert len(d.cylinders) == 12
 
 
 def test_crossovers_respect_phase_and_bounds():
