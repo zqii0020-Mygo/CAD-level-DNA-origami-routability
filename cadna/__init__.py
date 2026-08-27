@@ -8,6 +8,7 @@ from .io import save_design, load_design, design_to_dict, design_from_dict
 from .linkgraph import LinkGraph, Link, build_link_graph, port_of, opposite
 from .precheck import FAILURE_CLASSES, PrecheckResult, precheck
 from .routing import DesignLabel, RoutingResult, evaluate, find_scaffold_route, find_scaffold_path
+from .graph import NODE_TYPES, RELATIONS, HeteroGraph, build_graph, targets_from_label
 
 __all__ = [
     "HONEYCOMB", "SQUARE", "Lattice", "get_lattice", "RISE_PER_BP",
@@ -17,4 +18,5 @@ __all__ = [
     "LinkGraph", "Link", "build_link_graph", "port_of", "opposite",
     "FAILURE_CLASSES", "PrecheckResult", "precheck",
     "DesignLabel", "RoutingResult", "evaluate", "find_scaffold_route", "find_scaffold_path",
+    "NODE_TYPES", "RELATIONS", "HeteroGraph", "build_graph", "targets_from_label",
 ]

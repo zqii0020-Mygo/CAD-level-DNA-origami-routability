@@ -11,18 +11,21 @@ before routing:
 CAD geometry → heterogeneous graph → GNN → risk prediction → route or not
 ```
 
-## Current status — 2026-08-26
+## Current status — 2026-08-27
 
 - Target environment: Python 3.13 with PyTorch, NumPy, and NetworkX.
-- Completed: CAD parameter sampling; Feature / Bundle / Cylinder generation;
-  cylinder adjacency; candidate crossovers; mate constraints; and JSON / JSON.gz
-  export.
-- Dataset snapshot: `data/designs_v0` contains 1,000 generated CAD designs plus an
-  `index.csv` manifest.
-- Not yet implemented: routing precheck, scaffold routing, result labels, graph
-  extraction, and model training.
-- Next milestone: complete the minimal
-  `CAD → precheck → routing → label → cylinder graph` pipeline.
+  `torch_geometric` is optional and only needed by `HeteroGraph.to_pyg()`.
+- Completed: the whole `CAD → precheck → routing → label → hetero graph`
+  pipeline. Designs, labels and graphs are all on disk.
+- Dataset snapshot: `data/designs_v0` holds 1,000 designs + `index.csv` +
+  `labels.csv`; `data/designs_v0_graphs` holds the matching 1,000 hetero graphs
+  (99k nodes, 388k directed edges) + `graphs_index.csv`.
+- Labels: 245/1000 routable; Hamiltonian cycle 464 True / 506 False / 30 unknown
+  (budget); Hamiltonian path 715 / 241 / 44. 656 designs reach the search, and
+  162 of those are decided *by* the search rather than by the precheck.
+- Not yet implemented: the surrogate itself (`models/`) and its training split.
+- Next milestone: a baseline GNN over `data/designs_v0_graphs`, scored against
+  the precheck rules rather than against the majority class.
 
 ## Pipeline
 
@@ -37,8 +40,8 @@ CAD params                          cadna/params.py      [done]
    -> scaffold routing (DFS)        cadna/routing.py     [done]
    -> staple + export gates         cadna/routing.py     [done]
    -> label record                  labels.csv           [done]
-   -> graph extraction              cadna/graph.py       [next]
-   -> graph + label on disk         dataset              [next]
+   -> graph extraction              cadna/graph.py       [done]
+   -> graph + label on disk         dataset              [done]
    -> surrogate model               models/              [next]
 ```
 
@@ -73,21 +76,25 @@ cadna/
   linkgraph.py   the port graph the router searches, and the parity invariant
   precheck.py    cheap exact obstructions + the structural feature vector
   routing.py     the DFS, the staple and export gates, and the label record
+  graph.py       Design (+ label) -> hetero graph: numpy arrays, .npz, PyG
 scripts/
   gen_designs.py    sample N designs into a directory + index.csv
   route_designs.py  label a directory of designs -> labels.csv
+  build_graphs.py   designs + labels.csv -> one .npz per graph + graphs_index.csv
 tests/
   test_generator.py
   test_routing.py
+  test_graph.py
 ```
 
 ## Usage
 
 ```bash
 pip install -r requirements.txt
-python tests/test_generator.py && python tests/test_routing.py   # no pytest needed
+for t in tests/test_*.py; do python "$t"; done   # no pytest needed
 python scripts/gen_designs.py   --n 1000 --out data/designs_v0
 python scripts/route_designs.py --designs data/designs_v0
+python scripts/build_graphs.py  --designs data/designs_v0   # -> data/designs_v0_graphs
 ```
 
 ```python
@@ -101,6 +108,12 @@ save_design(d, "data/cube.json.gz")
 
 lab = evaluate(d)
 print(lab.routable, lab.hamilton, lab.failure_class, lab.nodes_expanded)
+
+from cadna import build_graph
+g = build_graph(d, lab)                 # numpy hetero graph + target vector
+print(g.summary())
+g.save("data/cube.npz")
+data = g.to_pyg()                       # torch_geometric HeteroData, if installed
 ```
 
 ## The routing model
@@ -132,6 +145,46 @@ Rothemund rectangle closes). `hamilton` is the strict cycle question;
 `hamilton_path` allows that one free closure, implemented by adding a virtual
 cylinder whose ports reach every real port. Both are reported, so the modelling
 choice stays open.
+
+## Graph schema
+
+`cadna/graph.py` turns a `Design` (plus its label) into a `HeteroGraph`: plain
+numpy arrays with the names of their columns, so nothing downstream depends on
+a graph library. `to_pyg()` converts to `torch_geometric.data.HeteroData`, and
+`save()` / `load()` write one `.npz` per design.
+
+| node type | count | dim | carries |
+|---|---|---|---|
+| `feature` | CAD primitives | 17 | kind, length, centre + direction, cross-section params |
+| `bundle` | helix groups | 17 | lattice, length in bp and turns, cross-section extent, axis |
+| `cylinder` | helices | 29 | bp interval, lattice site, geometry, **port degrees**, link counts |
+| `crossover` | candidate sites | 20 | bp index and phase, distance to each end, **the two ports**, `is_flip` |
+
+| relation | edges | attr dim |
+|---|---|---|
+| `cylinder --adjacent-> cylinder` | 2 per adjacency (both ways) | 11 |
+| `cylinder --mate-> cylinder` | 2 per mate (both ways) | 6 |
+| `crossover --on-> cylinder`, `cylinder --hosts-> crossover` | 2 per crossover, each way | 4 |
+| `bundle/feature --contains->` + reverses | the CAD hierarchy | — |
+
+A bare `adjacent` edge says two helices touch but not *which ends* a scaffold
+could join, so the parity invariant would be invisible. The port lives on the
+crossover node (`port_a_is_lo`, `is_flip`) and on the incidence edge, which is
+what `tests/test_graph.py::test_ports_survive_the_export` pins down.
+
+**Two graph-level blocks, deliberately separate.** `graph_x` (24) is pure
+CAD counting — sizes, densities, the bp budget. `precheck_x` (10) is the exact
+obstruction detectors: dead ports, components, articulation points, bridges,
+minimum degree, and the flip/no-flip parity. `precheck_x` alone decides every
+fatal precheck class, so feeding it to a model makes those labels free; it ships
+as a separate block precisely so `include_precheck=False` is a one-line
+ablation and the precheck stays a baseline instead of an input.
+
+**Targets** (`HeteroGraph.y`) are floats, with `NaN` for *unknown*: `hamilton`
+is NaN on the 30 designs whose cycle search hit the budget. `timeout` flags the
+search-cost targets as right-censored — `nodes_expanded` is a lower bound there,
+not the cost. `failure_class_id` indexes `FAILURE_CLASSES`, and is `-1` for a
+design that did not fail.
 
 ## Shape families
 
