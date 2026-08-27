@@ -29,10 +29,14 @@ CAD geometry → heterogeneous graph → GNN → risk prediction → route or no
   `timeout` 277, `geometry` 259, `export` 0.
 - The 1k and 10k runs agree closely (24.5% vs 24.1% routable), so the label
   distribution is a property of the parameter space, not of the sample size.
-- Results: `data/baseline_v1.json` (iid) and `data/baseline_v1_rare.json` (with
-  the oversampled supplement in training). See **The surrogate** below.
-- Next milestone: score the models on the subset the precheck cannot decide,
-  which is the only part of the distribution where a surrogate earns its keep.
+- Results (tracked in `results/`): `baseline_v1.json` (iid) and
+  `baseline_v1_rare.json` (with the oversampled supplement in training), both
+  sliced by whether the precheck had already decided the design. See
+  **The surrogate** below.
+- Next milestone: extrapolation. Every number so far comes from a random split,
+  so the test designs are the same *kind* of thing as the training ones.
+  `--split shape:<name>` and `--split size:<q>` hold out a region instead, which
+  is what separates a surrogate from a curve fit.
 
 ## Pipeline
 
@@ -246,8 +250,10 @@ dirty, dataset digests (the SHA-1 of `labels.csv` and of the graph manifest),
 seed range, and library versions -- so a table can be traced to the code and
 the data that produced it.
 
-Numbers below: 10,000 iid designs, 20 epochs, ~1,500 test designs, mean +- sd
-over seeds.
+Numbers below: 10,000 iid designs, 20 epochs, 3 seeds, mean +- sd.
+Source: `results/baseline_v1.json`.
+
+**All test designs (n = 1498).** The headline table, and the one to distrust.
 
 | model | routable bacc | hamilton bacc | failure macro F1 | cost rho (within size) | cost MAE |
 |---|---|---|---|---|---|
@@ -259,40 +265,74 @@ over seeds.
 | `gnn-structure` | 0.973 +- 0.01 | 0.983 +- 0.01 | 0.948 +- 0.00 | 0.865 +- 0.00 | 0.224 |
 | `gnn-rules` | **0.984 +- 0.00** | **0.992 +- 0.00** | **0.977 +- 0.00** | **0.870 +- 0.01** | 0.235 |
 
-Per failure class, which is where the macro average stops being informative:
+**Precheck-decided (n = 518, 35% of the test set).** Every design here is
+unroutable by an exact obstruction, so there is no binary discrimination to
+measure; only the failure class is scoreable.
 
-| failure F1 | none | geometry | pairability | hamilton | timeout | staple | scaffold |
-|---|---|---|---|---|---|---|---|
-| test support | 367 | 40 | 203 | 540 | 44 | 210 | 93 |
-| `mlp-counts` | 0.876 | 0.330 | 0.906 | 0.872 | 0.753 | 0.899 | 0.778 |
-| `mlp-rules` | 0.915 | 1.000 | 1.000 | 0.935 | 0.792 | 0.919 | 0.873 |
-| `gnn-structure` | 0.957 | 0.851 | 0.986 | 0.964 | 0.973 | 0.951 | 0.953 |
-| `gnn-rules` | 0.971 | 0.996 | 0.998 | 0.986 | 0.973 | 0.960 | 0.953 |
+| failure F1 | `majority` | `mlp-counts` | `mlp-rules` | `gnn-structure` | `gnn-rules` |
+|---|---|---|---|---|---|
+| | 0.236 | 0.717 | **1.000** | 0.937 | 0.997 |
 
-Three things this says:
+**Precheck-undecided (n = 980).** The label cost a search. This is the table
+that matters.
 
-1. **`mlp-rules` scoring exactly 1.000 on `geometry` and `pairability` is the
-   leakage, not a result.** Those two classes *are* `precheck_x`; handing a
-   model the block hands it the answer. This is why the block is separable.
-2. **Structure carries what the rules do not.** `gnn-structure` never sees
-   `precheck_x` and still reaches 0.851 / 0.986 on those same two classes -- it
-   rediscovers the obstructions from the graph. And on `timeout` it goes the
-   other way, 0.973 against the rules baseline's 0.792: how expensive a search
-   will be is not something an exact obstruction knows anything about.
-3. **The cost head is doing more than reading off the size.** A size-only
+| model | routable bacc | hamilton bacc | failure macro F1 |
+|---|---|---|---|
+| `majority` | 0.500 | 0.500 | 0.106 |
+| `precheck-rule` | 0.640 | 0.525 | -- |
+| `mlp-counts` | 0.931 +- 0.01 | 0.899 +- 0.01 | 0.838 +- 0.01 |
+| `mlp-rules` | 0.943 +- 0.00 | 0.920 +- 0.01 | 0.874 +- 0.01 |
+| `gnn-structure` | 0.966 +- 0.01 | 0.977 +- 0.01 | 0.960 +- 0.01 |
+| `gnn-rules` | **0.977 +- 0.00** | **0.983 +- 0.00** | **0.966 +- 0.00** |
+
+Per class on that slice (`geometry` and `pairability` do not appear: the
+precheck decides both, so they live entirely in the other slice):
+
+| failure F1 | none | hamilton | timeout | staple | scaffold |
+|---|---|---|---|---|---|
+| test support | 367 | 268 | 44 | 210 | 93 |
+| `mlp-counts` | 0.893 | 0.834 | 0.753 | 0.903 | 0.808 |
+| `mlp-rules` | 0.915 | 0.871 | 0.792 | 0.919 | 0.873 |
+| `gnn-structure` | 0.960 | 0.957 | 0.973 | 0.953 | 0.956 |
+| `gnn-rules` | 0.971 | 0.975 | 0.973 | 0.960 | 0.953 |
+
+What the slicing changes:
+
+1. **The gap between `gnn-structure` and `mlp-rules` widens when the free
+   designs are removed**, from +0.010 to +0.023 routable bacc (+0.057 hamilton,
+   +0.086 macro F1). The expected failure mode was the opposite -- that the GNN
+   was banking labels the rules hand out -- so this is the load-bearing result:
+   the free negatives were *flattering the rules model*, which scores exactly
+   1.000 on the decided slice because that slice **is** `precheck_x`, while
+   `gnn-structure` gets 0.937 there without being told the rules.
+2. **The rules are worth something even where they did not decide**:
+   `precheck-rule` still reaches 0.640 on `routable` in the undecided slice,
+   through the non-fatal `scaffold_length` check. On `hamilton`, where it has
+   nothing to say, it is 0.525 -- a coin flip, as it should be.
+3. **`timeout` is where structure wins outright**: 0.973 against 0.792 for the
+   rules baseline. How expensive a search will be is not something an exact
+   obstruction knows anything about.
+4. **The cost head is doing more than reading off the size.** A size-only
    predictor gets rho = 0.804 overall and nothing at all within a size bin; the
-   GNNs reach 0.87 within bins, and cut the MAE from 1.01 to 0.22.
+   GNNs reach 0.87 within bins and cut the MAE from 1.01 to 0.22. (Cost metrics
+   are identical in the `all` and undecided tables: cost is only defined for
+   designs that were searched, which is precisely the undecided slice.)
 
 ### Does oversampling the thin classes help?
 
 Same seeds and the same iid test set, adding the 300-design `rare:` supplement
 to *training only* (`--graphs data/designs_v1_graphs,data/designs_v1_rare_graphs`):
 
-| failure F1 | `mlp-counts` | `mlp-rules` | `gnn-structure` | `gnn-rules` |
+| all designs | `mlp-counts` | `mlp-rules` | `gnn-structure` | `gnn-rules` |
 |---|---|---|---|---|
-| `geometry` | 0.330 -> **0.489** | 1.000 -> 1.000 | 0.851 -> 0.881 | 0.996 -> 0.996 |
-| `timeout` | 0.753 -> 0.733 | 0.792 -> **0.828** | 0.973 -> **0.982** | 0.973 -> 0.971 |
-| macro | 0.773 -> 0.795 | 0.919 -> 0.924 | 0.948 -> 0.956 | 0.977 -> 0.976 |
+| `geometry` F1 | 0.330 -> **0.489** | 1.000 -> 1.000 | 0.851 -> 0.881 | 0.996 -> 0.996 |
+| `timeout` F1 | 0.753 -> 0.733 | 0.792 -> **0.828** | 0.973 -> **0.982** | 0.973 -> 0.971 |
+| macro F1 | 0.773 -> 0.795 | 0.919 -> 0.924 | 0.948 -> 0.956 | 0.977 -> 0.976 |
+
+| undecided slice | `mlp-counts` | `mlp-rules` | `gnn-structure` | `gnn-rules` |
+|---|---|---|---|---|
+| routable bacc | 0.931 -> 0.929 | 0.943 -> 0.941 | 0.966 -> **0.971** | 0.977 -> 0.973 |
+| macro F1 | 0.838 -> 0.837 | 0.874 -> **0.881** | 0.960 -> **0.966** | 0.966 -> 0.964 |
 
 It helps where a model was starved and does nothing where one had already
 saturated the class -- 2.4% more training data moved `mlp-counts` on `geometry`
