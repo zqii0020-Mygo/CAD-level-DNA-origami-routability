@@ -79,16 +79,21 @@ EDGE_FAMILY: dict[Relation, str] = {
     R_FEAT_BUNDLE: "containment", R_BUNDLE_FEAT: "containment",
 }
 
-FEATURE_KINDS = ("edge", "brick", "plate", "block")
+FEATURE_KINDS = ("edge", "brick", "plate")   # the kinds `generator.py` emits
 ADJ_KINDS = ("intra", "inter")
 MATE_KINDS = ("vertex", "concat")
 
 # Graph-level descriptors, split as described in the module docstring.
+# Exact duplicates are left out rather than carried: `n_features` equals
+# `n_bundles` (every shape family builds one bundle per feature), `n_links_mate`
+# equals `n_mates` (mates never collapse into a shared link), and `port_deg_mean`
+# is `link_density` by definition (2L / 2n).  The one-hot blocks below are
+# rank-deficient in the usual way; that is left alone.
 GRAPH_STAT_FIELDS = (
-    "n_features", "n_bundles", "n_cylinders", "n_candidate_crossovers",
-    "n_mates", "n_links", "n_links_crossover", "n_links_mate", "link_density",
+    "n_bundles", "n_cylinders", "n_candidate_crossovers",
+    "n_mates", "n_links", "n_links_crossover", "link_density",
     "total_bp", "scaffold_len", "bp_over_scaffold",
-    "port_deg_mean", "port_deg_max", "cyl_deg_mean", "cyl_deg_max",
+    "port_deg_max", "cyl_deg_mean", "cyl_deg_max",
 )
 PRECHECK_FIELDS = (
     "n_dead_ports", "n_unpaired_ends", "n_components", "n_articulation",
@@ -344,13 +349,12 @@ def build_graph(
     f_fields = [f"kind_{k}" for k in FEATURE_KINDS] + [
         "length_nm", "n_bundles", "n_cylinders",
         "cx", "cy", "cz", "dx", "dy", "dz",
-        "meta_n_rows", "meta_n_cols", "meta_fill", "helices_per_bundle",
+        "meta_n_rows", "meta_n_cols", "meta_fill",
     ]
     f_rows = []
     for f in design.features:
         p0 = np.asarray(f.p0, dtype=np.float64)
         p1 = np.asarray(f.p1, dtype=np.float64)
-        nb = max(1, len(f.bundle_ids))
         f_rows.append(
             _onehot(f.kind, FEATURE_KINDS)
             + [f.length_nm, float(len(f.bundle_ids)), float(n_cyl_feature[f.id])]
@@ -360,7 +364,6 @@ def build_graph(
                 float(f.meta.get("n_rows", 0) or 0),
                 float(f.meta.get("n_cols", 0) or 0),
                 float(f.meta.get("fill", 0.0) or 0.0),
-                n_cyl_feature[f.id] / nb,
             ]
         )
     hg.x["feature"] = _rows(f_fields, f_rows)
@@ -368,7 +371,7 @@ def build_graph(
 
     # ----------------------------------------------------------------- bundles
     b_fields = [f"lattice_{k}" for k in LATTICES] + [
-        "length_bp", "length_turns", "n_cylinders", "n_sites", "fill_ratio",
+        "length_bp", "length_turns", "n_cylinders",
         "rows_extent", "cols_extent",
         "ax", "ay", "az", "ox", "oy", "oz",
         "n_crossovers", "mean_cyl_degree",
@@ -383,8 +386,7 @@ def build_graph(
         b_rows.append(
             _onehot(b.lattice, LATTICES)
             + [
-                float(b.length_bp), b.length_bp / step, float(nc), float(len(sites)),
-                nc / max(1, len(sites)),
+                float(b.length_bp), b.length_bp / step, float(nc),
                 float(max(rows) - min(rows) + 1), float(max(cols) - min(cols) + 1),
             ]
             + _unit(b.axis)
@@ -397,7 +399,7 @@ def build_graph(
     # --------------------------------------------------------------- cylinders
     c_fields = [
         "bp_len", "bp_len_turns", "bp_start", "bp_start_turns",
-        "frac_of_bundle", "inset_lo_bp", "inset_hi_bp", "length_nm",
+        "frac_of_bundle", "inset_hi_bp",
         "row", "col", "row_rel", "col_rel",
         "cx", "cy", "cz", "ax", "ay", "az",
         "n_adjacent_intra", "n_adjacent_inter", "n_crossovers", "n_mates",
@@ -415,8 +417,7 @@ def build_graph(
         c_rows.append([
             float(c.bp_len), c.bp_len / step, float(c.bp_start), c.bp_start / step,
             c.bp_len / max(1, b.length_bp),
-            float(c.bp_start), float(max(0, b.length_bp - c.bp_end)),
-            float(np.linalg.norm(p1 - p0)),
+            float(max(0, b.length_bp - c.bp_end)),
             float(c.row), float(c.col), c.row - row_c, c.col - col_c,
         ] + nxyz((p0 + p1) / 2.0) + _unit(c.axis) + [
             float(n_adj_intra[c.id]), float(n_adj_inter[c.id]),
@@ -574,6 +575,8 @@ def build_graph(
     hg.meta = {
         "shape": str(design.params.get("shape", "?")),
         "lattice": design.lattice,
+        # "iid" or "rare:<class>" -- how this design was drawn (see gen_designs.py)
+        "sampling": str(design.notes.get("sampling", "iid")),
         "coord_centre": [float(v) for v in centre],
         "coord_scale": float(scale),
         "lattice_step_bp": int(lat.step),

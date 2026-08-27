@@ -3,6 +3,20 @@
 The split is by design, deterministic in a seed, and stratified on the shape
 family so every split sees all four routing regimes.  Feature statistics come
 from the training split only.
+
+Two things here are not bookkeeping but modelling decisions:
+
+`ClassMap` gives the failure head one slot per class that actually occurs.
+`export` never fires -- a route that fails `validate_route` is a router bug, not
+a property of the design -- so a fixed seven-way head spends an output on a
+class with no examples, which can only cost it precision elsewhere.
+
+`CostBaseline` makes the search-cost target say something other than "this
+design is big".  `nodes_expanded` grows with the number of cylinders, so a
+predictor that has learned only the size gets a high rank correlation for free.
+The baseline is a per-size-bin median fitted on the *training* split; the model
+regresses the residual against it, and `cost_rho_within` scores the residual
+inside size bins, where the size signal is gone.
 """
 
 from __future__ import annotations
@@ -10,15 +24,18 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
 from cadna.graph import NODE_TYPES, HeteroGraph
 from cadna.precheck import FAILURE_CLASSES
 
-# 0 == "no failure"; the seven FAILURE_CLASSES follow, so id = stored_id + 1
+# 0 == "no failure"; the FAILURE_CLASSES follow, so id = stored_id + 1
 CLASS_NAMES = ("none",) + FAILURE_CLASSES
 N_CLASSES = len(CLASS_NAMES)
+
+COST_BINS = 8
 
 
 @dataclass
@@ -31,21 +48,43 @@ class Split:
         return f"Split(train={len(self.train)}, val={len(self.val)}, test={len(self.test)})"
 
 
-def load_graphs(directory: str | Path) -> list[HeteroGraph]:
-    paths = sorted(Path(directory).glob("*.npz"))
-    if not paths:
-        raise FileNotFoundError(f"no .npz graphs in {directory}")
-    return [HeteroGraph.load(p) for p in paths]
+def load_graphs(directory: str | Path | Sequence[str | Path]) -> list[HeteroGraph]:
+    """Load one graph directory, or several concatenated in the order given.
+
+    Several is how an oversampled tail is added to an iid dataset without
+    touching either manifest: the marker in each graph decides where it may
+    land, not the directory it came from.
+    """
+    dirs = ([directory] if isinstance(directory, (str, Path))
+            else list(directory))
+    dirs = [d for part in dirs for d in str(part).split(",") if d]
+    graphs: list[HeteroGraph] = []
+    for d in dirs:
+        paths = sorted(Path(d).glob("*.npz"))
+        if not paths:
+            raise FileNotFoundError(f"no .npz graphs in {d}")
+        graphs += [HeteroGraph.load(p) for p in paths]
+    return graphs
 
 
 def make_split(graphs: list[HeteroGraph], seed: int = 0,
                fracs: tuple[float, float, float] = (0.7, 0.15, 0.15)) -> Split:
-    """Shape-stratified random split, deterministic in `seed`."""
+    """Shape-stratified random split, deterministic in `seed`.
+
+    Designs drawn by rare-class oversampling (`meta["sampling"] != "iid"`) go
+    into the training split only.  Validation and test have to stay a sample of
+    the natural distribution: a test set topped up with hand-picked timeouts
+    reports a class balance that no real design stream has.
+    """
     by_shape: dict[str, list[int]] = {}
+    extra_train: list[int] = []
     for i, g in enumerate(graphs):
+        if str(g.meta.get("sampling", "iid")) != "iid":
+            extra_train.append(i)
+            continue
         by_shape.setdefault(str(g.meta.get("shape", "?")), []).append(i)
 
-    train: list[int] = []
+    train: list[int] = list(extra_train)
     val: list[int] = []
     test: list[int] = []
     rng = random.Random(seed)
@@ -102,13 +141,104 @@ class Normaliser:
             g.precheck_x = ((g.precheck_x - self.precheck_mean) / self.precheck_std).astype(np.float32)
 
 
-def to_pyg_list(graphs: list[HeteroGraph], include_precheck: bool):
-    """Convert once, up front: 1000 small graphs fit in memory comfortably."""
+@dataclass
+class ClassMap:
+    """The failure classes that actually occur, mapped onto contiguous slots.
+
+    Presence of a class is a property of the dataset, not of an individual
+    label, so this is fitted on all of it rather than on the training split.
+    """
+
+    names: list[str]
+    to_slot: dict[int, int]
+
+    @property
+    def n(self) -> int:
+        return len(self.names)
+
+    def slot(self, vocab_id: int) -> int:
+        return self.to_slot[int(vocab_id)]
+
+    @classmethod
+    def fit(cls, graphs: list[HeteroGraph]) -> "ClassMap":
+        present = sorted({int(g.y["failure_class_id"]) + 1 for g in graphs})
+        return cls(names=[CLASS_NAMES[i] for i in present],
+                   to_slot={vid: k for k, vid in enumerate(present)})
+
+    @property
+    def dropped(self) -> list[str]:
+        return [n for n in CLASS_NAMES if n not in self.names]
+
+
+@dataclass
+class CostBaseline:
+    """log(nodes expanded) explained by design size alone: the number to beat.
+
+    Fitted on the training split, on the designs that were actually searched to
+    completion -- a design that hit the node budget is right-censored, so its
+    count is a lower bound and would drag the median down.
+    """
+
+    edges: np.ndarray            # size bin edges, from training quantiles
+    medians: np.ndarray          # median log-cost per bin
+    overall: float
+
+    def bin_of(self, sizes: np.ndarray) -> np.ndarray:
+        return np.clip(np.searchsorted(self.edges, sizes, side="right") - 1,
+                       0, len(self.medians) - 1)
+
+    def predict(self, sizes: np.ndarray) -> np.ndarray:
+        return self.medians[self.bin_of(np.asarray(sizes, dtype=float))]
+
+    @classmethod
+    def fit(cls, graphs: list[HeteroGraph], train_idx: list[int],
+            n_bins: int = COST_BINS) -> "CostBaseline":
+        sizes = np.array([graph_size(graphs[i]) for i in train_idx], dtype=float)
+        cost = np.array([graphs[i].y.get("log_nodes_expanded", np.nan) for i in train_idx])
+        usable = np.array([
+            graphs[i].y.get("searched", 0.0) > 0.5 and graphs[i].y.get("timeout", 0.0) < 0.5
+            for i in train_idx
+        ])
+        m = usable & np.isfinite(cost)
+        if m.sum() < n_bins * 2:
+            overall = float(np.median(cost[m])) if m.any() else 0.0
+            return cls(np.array([-np.inf]), np.array([overall]), overall)
+
+        qs = np.linspace(0, 1, n_bins + 1)
+        edges = np.unique(np.quantile(sizes[m], qs))
+        edges[0] = -np.inf
+        medians = []
+        overall = float(np.median(cost[m]))
+        idx = np.clip(np.searchsorted(edges, sizes, side="right") - 1, 0, len(edges) - 2)
+        for b in range(len(edges) - 1):
+            sel = m & (idx == b)
+            medians.append(float(np.median(cost[sel])) if sel.sum() >= 3 else overall)
+        return cls(edges[:-1], np.array(medians), overall)
+
+
+def graph_size(g: HeteroGraph) -> int:
+    """Design size = cylinder count.  Read off the graph, so it survives scaling."""
+    return g.num_nodes("cylinder")
+
+
+def to_pyg_list(graphs: list[HeteroGraph], include_precheck: bool,
+                class_map: "ClassMap | None" = None,
+                cost_baseline: "CostBaseline | None" = None):
+    """Convert once, up front: the graphs are small and fit in memory comfortably."""
+    class_map = class_map or ClassMap.fit(graphs)
     out = []
     for g in graphs:
         d = g.to_pyg(include_precheck=include_precheck)
-        # failure_class_id is -1 for "no failure"; shift so 0 == none
-        d.y_class = (d.y_failure_class_id + 1).long()
+        # failure_class_id is -1 for "no failure"; shift so 0 == none, then map
+        # onto the slots of the classes this dataset actually contains
+        d.y_class = d.y_failure_class_id.new_tensor(
+            [class_map.slot(int(d.y_failure_class_id) + 1)]
+        ).long()
+        size = float(graph_size(g))
+        d.y_size = d.y_routable.new_tensor([size])
+        base = float(cost_baseline.predict([size])[0]) if cost_baseline else 0.0
+        d.y_cost_base = d.y_routable.new_tensor([base])
+        d.y_cost_resid = d.y_log_nodes_expanded - d.y_cost_base
         out.append(d)
     return out
 

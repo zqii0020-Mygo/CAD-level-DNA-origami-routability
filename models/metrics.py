@@ -55,10 +55,15 @@ def roc_auc(y: np.ndarray, p: np.ndarray) -> float:
     return float((ranks[pos].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
 
 
-def macro_f1(y: np.ndarray, hat: np.ndarray, n_classes: int) -> float:
+def class_f1s(y: np.ndarray, hat: np.ndarray, n_classes: int) -> dict[int, tuple[float, int]]:
+    """{class: (F1, support)} for every class present in `y`.
+
+    Absent classes are left out rather than scored zero: a class with no
+    examples in this split says nothing about the model.
+    """
     y, hat = _clean(y.astype(float), hat.astype(float))
     y, hat = y.astype(int), hat.astype(int)
-    f1s = []
+    out: dict[int, tuple[float, int]] = {}
     for c in range(n_classes):
         tp = int(((hat == c) & (y == c)).sum())
         fp = int(((hat == c) & (y != c)).sum())
@@ -67,7 +72,12 @@ def macro_f1(y: np.ndarray, hat: np.ndarray, n_classes: int) -> float:
             continue                      # class absent from this split
         prec = tp / (tp + fp) if tp + fp else 0.0
         rec = tp / (tp + fn)
-        f1s.append(2 * prec * rec / (prec + rec) if prec + rec else 0.0)
+        out[c] = (2 * prec * rec / (prec + rec) if prec + rec else 0.0, tp + fn)
+    return out
+
+
+def macro_f1(y: np.ndarray, hat: np.ndarray, n_classes: int) -> float:
+    f1s = [f for f, _n in class_f1s(y, hat, n_classes).values()]
     return float(np.mean(f1s)) if f1s else float("nan")
 
 
@@ -99,6 +109,28 @@ def spearman(y: np.ndarray, p: np.ndarray) -> float:
     rp = rp - rp.mean()
     den = float(np.sqrt((ry**2).sum() * (rp**2).sum()))
     return float((ry * rp).sum() / den) if den else float("nan")
+
+
+def stratified_spearman(y: np.ndarray, p: np.ndarray, groups: np.ndarray) -> float:
+    """Spearman computed inside each group, averaged weighted by group size.
+
+    Search cost grows with design size, so a plain rank correlation is mostly a
+    measure of "did the model notice how big the design is".  Correlating only
+    within a size stratum removes that, and a predictor that outputs a constant
+    per stratum -- which is what the size baseline does -- scores nothing here.
+    """
+    m = ~np.isnan(y) & ~np.isnan(p)
+    y, p, groups = y[m], p[m], groups[m]
+    num = den = 0.0
+    for g in np.unique(groups):
+        sel = groups == g
+        if sel.sum() < 3:
+            continue
+        rho = spearman(y[sel], p[sel])
+        if not np.isnan(rho):
+            num += rho * sel.sum()
+            den += sel.sum()
+    return float(num / den) if den else float("nan")
 
 
 def mae(y: np.ndarray, p: np.ndarray) -> float:

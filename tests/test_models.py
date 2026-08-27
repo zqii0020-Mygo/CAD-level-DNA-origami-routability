@@ -11,7 +11,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cadna import evaluate, generate, sample_params  # noqa: E402
 from cadna.graph import NODE_TYPES, build_graph  # noqa: E402
-from models.data import N_CLASSES, Normaliser, make_split, to_pyg_list  # noqa: E402
+from models.data import (  # noqa: E402
+    CLASS_NAMES,
+    N_CLASSES,
+    ClassMap,
+    CostBaseline,
+    Normaliser,
+    graph_size,
+    make_split,
+    to_pyg_list,
+)
 from models.metrics import (  # noqa: E402
     balanced_accuracy,
     mae,
@@ -19,6 +28,7 @@ from models.metrics import (  # noqa: E402
     multiclass_accuracy,
     roc_auc,
     spearman,
+    stratified_spearman,
 )
 
 
@@ -95,6 +105,19 @@ def test_split_is_stratified_by_shape():
     assert train_shapes == shapes, "training split is missing a routing regime"
 
 
+def test_oversampled_designs_stay_out_of_val_and_test():
+    """Rare-class draws are not from the natural distribution -- train only."""
+    graphs = _tiny_dataset(40)
+    for g in graphs[::5]:
+        g.meta["sampling"] = "rare:timeout"
+    split = make_split(graphs, seed=0)
+    marked = {i for i, g in enumerate(graphs) if g.meta.get("sampling", "iid") != "iid"}
+    assert marked, "the fixture marked nothing"
+    assert marked <= set(split.train)
+    assert not (marked & set(split.val)) and not (marked & set(split.test))
+    assert sorted(split.train + split.val + split.test) == list(range(len(graphs)))
+
+
 # ------------------------------------------------------------------ normaliser
 def test_normaliser_uses_training_statistics_only():
     graphs = _tiny_dataset(40)
@@ -128,19 +151,20 @@ def test_models_produce_the_expected_head_shapes():
     from models.nets import GraphMLP, HeteroGNN
 
     graphs = _tiny_dataset(12)
+    cmap = ClassMap.fit(graphs)
     for include_precheck in (False, True):
-        data = to_pyg_list(graphs, include_precheck=include_precheck)
+        data = to_pyg_list(graphs, include_precheck=include_precheck, class_map=cmap)
         batch = next(iter(DataLoader(data, batch_size=6)))
         graph_dim = int(data[0].graph_x.shape[1])
         in_dims = {t: int(data[0][t].x.shape[1]) for t in NODE_TYPES}
 
-        for model in (GraphMLP(graph_dim, hidden=16),
-                      HeteroGNN(in_dims, graph_dim, hidden=16, layers=2)):
+        for model in (GraphMLP(graph_dim, hidden=16, n_classes=cmap.n),
+                      HeteroGNN(in_dims, graph_dim, hidden=16, layers=2, n_classes=cmap.n)):
             out = model(batch)
             assert out["routable"].shape == (6,)
             assert out["hamilton"].shape == (6,)
             assert out["cost"].shape == (6,)
-            assert out["failure"].shape == (6, N_CLASSES)
+            assert out["failure"].shape == (6, cmap.n)
             assert torch.isfinite(out["failure"]).all()
 
 
@@ -151,9 +175,57 @@ def test_precheck_block_changes_the_input_width():
 
 
 def test_class_ids_are_shifted_into_range():
-    data = to_pyg_list(_tiny_dataset(40), include_precheck=False)
+    graphs = _tiny_dataset(40)
+    cmap = ClassMap.fit(graphs)
+    data = to_pyg_list(graphs, include_precheck=False, class_map=cmap)
     ids = np.array([int(d.y_class) for d in data])
-    assert ids.min() >= 0 and ids.max() < N_CLASSES
+    assert ids.min() >= 0 and ids.max() < cmap.n <= N_CLASSES
+
+
+def test_class_map_only_keeps_classes_with_examples():
+    """`export` never fires, so the failure head must not carry a slot for it."""
+    graphs = _tiny_dataset(60)
+    cmap = ClassMap.fit(graphs)
+    present = {CLASS_NAMES[int(g.y["failure_class_id"]) + 1] for g in graphs}
+    assert set(cmap.names) == present
+    assert "export" not in cmap.names
+    assert sorted(cmap.to_slot.values()) == list(range(cmap.n)), "slots are not contiguous"
+    assert set(cmap.names) & set(cmap.dropped) == set()
+
+
+# ------------------------------------------------------------------ cost target
+def test_cost_baseline_is_fitted_on_the_training_split_only():
+    graphs = _tiny_dataset(60)
+    split = make_split(graphs, seed=0)
+    before = CostBaseline.fit(graphs, split.train, n_bins=3)
+    victim = split.test[0]
+    graphs[victim].y["log_nodes_expanded"] = 1e6
+    after = CostBaseline.fit(graphs, split.train, n_bins=3)
+    assert np.allclose(before.medians, after.medians)
+
+
+def test_cost_baseline_ignores_censored_designs():
+    """A timed-out design reports the budget, which is a bound, not a cost."""
+    graphs = _tiny_dataset(40)
+    idx = list(range(len(graphs)))
+    honest = CostBaseline.fit(graphs, idx, n_bins=3)
+    for g in graphs:                      # pretend every design hit the budget
+        g.y["timeout"] = 1.0
+        g.y["log_nodes_expanded"] = 99.0
+    censored = CostBaseline.fit(graphs, idx, n_bins=3)
+    assert (honest.medians != 99.0).all()
+    assert (censored.medians != 99.0).all(), "a censored value leaked into the baseline"
+
+
+def test_size_stratified_correlation_cannot_be_won_by_size():
+    graphs = _tiny_dataset(40)
+    base = CostBaseline.fit(graphs, list(range(len(graphs))), n_bins=4)
+    sizes = np.array([graph_size(g) for g in graphs], dtype=float)
+    bins = base.bin_of(sizes)
+    y = np.array([float(g.y["log_nodes_expanded"]) for g in graphs])
+    size_pred = base.predict(sizes)
+    within = stratified_spearman(y, size_pred, bins)
+    assert np.isnan(within) or abs(within) < 1e-9, "the size baseline scored inside its own bin"
 
 
 if __name__ == "__main__":

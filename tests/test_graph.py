@@ -149,6 +149,43 @@ def test_coordinates_are_normalised():
         assert hg.meta["coord_scale"] > 0
 
 
+def test_no_duplicate_feature_columns():
+    """No column may be an exact copy of another -- an identity is not a feature.
+
+    Columns that are constant only because the default sampler never turns the
+    corresponding option on (inter-bundle crossovers, concat mates) are allowed:
+    they come alive with other `CADParams`, so dropping them would lose data.
+    """
+    allowed_constant = {
+        "n_bundles", "n_adjacent_inter", "adj_kind_intra", "adj_kind_inter",
+        "kind_intra", "kind_inter", "kind_vertex", "kind_concat",
+    }
+    graphs = [build_graph(generate(sample_params(s))) for s in SEEDS]
+    blocks: list[tuple[str, list[str], np.ndarray]] = []
+    for t in NODE_TYPES:
+        mats = [g.x[t] for g in graphs if g.x[t].shape[0]]
+        blocks.append((t, graphs[0].node_fields[t], np.concatenate(mats, axis=0)))
+    for rel in (R_ADJACENT, R_MATE, R_XO_ON):
+        mats = [g.edge_attr[rel] for g in graphs if g.edge_attr[rel].shape[0]]
+        blocks.append(("/".join(rel), graphs[0].edge_fields[rel], np.concatenate(mats, axis=0)))
+    blocks.append((
+        "graph",
+        graphs[0].graph_fields + graphs[0].precheck_fields,
+        np.stack([np.concatenate([g.graph_x, g.precheck_x]) for g in graphs]),
+    ))
+
+    for name, fields, x in blocks:
+        for j, f in enumerate(fields):
+            if x[:, j].std() < 1e-9:
+                assert f in allowed_constant, f"{name}.{f} is constant ({x[0, j]})"
+        for i in range(len(fields)):
+            for j in range(i + 1, len(fields)):
+                if fields[i].startswith(("kind_", "lattice_", "shape_", "adj_kind_")):
+                    continue                    # one-hots are rank-deficient by design
+                assert not np.allclose(x[:, i], x[:, j], rtol=1e-4, atol=1e-4), \
+                    f"{name}: {fields[i]} duplicates {fields[j]}"
+
+
 def test_precheck_block_is_separable():
     """The obstruction detectors live in their own block, never in graph_x."""
     hg = build_graph(generate(sample_params(3)))

@@ -75,6 +75,7 @@ def main() -> int:
             "graph": gpath.name,
             "shape": hg.meta["shape"],
             "lattice": hg.meta["lattice"],
+            "sampling": hg.meta.get("sampling", "iid"),
             **{f"n_{t}": hg.num_nodes(t) for t in NODE_TYPES},
             # full triple: `contains` and `in` name two relations each
             **{"n_" + "_".join(rel): hg.num_edges(rel) for rel in RELATIONS},

@@ -24,7 +24,7 @@ METRIC_ORDER = [
     "routable_bacc", "routable_auc",
     "hamilton_bacc", "hamilton_auc",
     "failure_acc", "failure_f1",
-    "cost_rho", "cost_mae",
+    "cost_rho", "cost_rho_within", "cost_mae",
 ]
 
 
@@ -54,15 +54,20 @@ def main() -> int:
     results: dict[str, list[dict]] = {}
     refs = None
 
+    ctx = None
     for seed in range(args.seeds):
-        graphs, split = load_dataset(str(args.graphs), split_seed=seed)
+        graphs, split, ctx = load_dataset(str(args.graphs), split_seed=seed)
         if seed == 0:
             print(f"{len(graphs)} graphs   {split}")
+            print(f"failure classes: {ctx.class_map.n} used "
+                  f"({', '.join(ctx.class_map.names)})"
+                  + (f"; dropped as empty: {', '.join(ctx.class_map.dropped)}"
+                     if ctx.class_map.dropped else ""))
         for cfg in configs:
-            r = run(cfg, graphs, split, seed=seed, verbose=args.verbose)
+            r = run(cfg, graphs, split, ctx, seed=seed, verbose=args.verbose)
             results.setdefault(cfg.name, []).append(r)
             if refs is None:
-                refs = reference_baselines(r["pred"])
+                refs = reference_baselines(r["pred"], ctx)
             print(f"  seed {seed}  {cfg.name:<14} "
                   + "  ".join(f"{k.split('_')[-1]}={fmt(r['test'][k])}" for k in METRIC_ORDER[:6])
                   + f"   ({time.perf_counter() - t0:.0f}s)", flush=True)
@@ -88,13 +93,39 @@ def main() -> int:
     for cfg in configs:
         print(f"  {cfg.name:<14} {cfg.note}")
 
+    # per-class F1: the thin classes are what the macro average hides
+    names = list(ctx.class_map.names) if ctx else []
+    support = {}
+    for name in names:
+        vals = [r["test_class_f1"].get(name) for r in results[configs[0].name]]
+        support[name] = int(np.mean([v[1] for v in vals if v])) if any(vals) else 0
+    chead = f"{'failure F1':<16}" + "".join(f"{n:>16}" for n in names)
+    print("\n" + chead)
+    print(f"{'test support':<16}" + "".join(f"{support[n]:>16}" for n in names))
+    print("-" * len(chead))
+    per_class = {}
+    for cfg in configs:
+        row = f"{cfg.name:<16}"
+        per_class[cfg.name] = {}
+        for n in names:
+            vals = [r["test_class_f1"].get(n) for r in results[cfg.name]]
+            vals = [v[0] for v in vals if v]
+            mu = float(np.mean(vals)) if vals else float("nan")
+            per_class[cfg.name][n] = mu
+            row += fmt(mu).rjust(16)
+        print(row)
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps({
+        "n_graphs": len(graphs),
+        "classes": {"used": ctx.class_map.names, "dropped": ctx.class_map.dropped} if ctx else {},
         "reference": refs,
         "configs": {c.name: {"model": c.model, "include_precheck": c.include_precheck,
                              "hidden": c.hidden, "layers": c.layers, "epochs": c.epochs,
                              "note": c.note} for c in configs},
         "results": summary,
+        "class_f1": per_class,
+        "class_support": support,
         "n_params": {c.name: results[c.name][0]["n_params"] for c in configs},
     }, indent=2), encoding="utf-8")
     print(f"\nwrote {args.out}   ({time.perf_counter() - t0:.0f}s)")

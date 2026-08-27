@@ -80,6 +80,15 @@ def main() -> int:
     print(f"hamilton cycle  : {dict(ham)}")
     print(f"hamilton path   : {dict(hpath)}")
     print(f"failure classes : {dict(fc.most_common())}")
+    # A timeout that stopped on the *time* budget rather than the node budget is
+    # a label that depends on how busy the machine was, so it is not
+    # reproducible.  In a quiet run this list is empty.
+    wall_bound = [r for r in rows if r["timeout"] and r["nodes_expanded"] < args.node_budget]
+    if wall_bound:
+        print(f"WARNING: {len(wall_bound)} timeout label(s) hit the {args.time_budget}s wall "
+              f"clock instead of the {args.node_budget}-node budget, so they depend on "
+              f"machine load; e.g. {[r['design_id'] for r in wall_bound[:3]]}", file=sys.stderr)
+
     if nodes:
         q = lambda f: nodes[min(len(nodes) - 1, int(f * len(nodes)))]  # noqa: E731
         print(f"search reached  : {len(searched)}/{n}")
