@@ -11,6 +11,19 @@ before routing:
 CAD geometry → heterogeneous graph → GNN → risk prediction → route or not
 ```
 
+## Current status — 2026-08-26
+
+- Target environment: Python 3.13 with PyTorch, NumPy, and NetworkX.
+- Completed: CAD parameter sampling; Feature / Bundle / Cylinder generation;
+  cylinder adjacency; candidate crossovers; mate constraints; and JSON / JSON.gz
+  export.
+- Dataset snapshot: `data/designs_v0` contains 1,000 generated CAD designs plus an
+  `index.csv` manifest.
+- Not yet implemented: routing precheck, scaffold routing, result labels, graph
+  extraction, and model training.
+- Next milestone: complete the minimal
+  `CAD → precheck → routing → label → cylinder graph` pipeline.
+
 ## Pipeline
 
 ```
