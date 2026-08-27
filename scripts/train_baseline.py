@@ -33,7 +33,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from models.provenance import provenance  # noqa: E402
+from models.provenance import provenance, run_start  # noqa: E402
 from models.train import (  # noqa: E402
     CONFIGS,
     SLICES,
@@ -118,6 +118,9 @@ def main() -> int:
         for c in configs:
             c.epochs = args.epochs
 
+    # snapshot the code state now: a commit landing mid-run must not be recorded
+    # as the code that produced this table
+    start = run_start()
     t0 = time.perf_counter()
     results: dict[str, list[dict]] = {}
     refs = None
@@ -191,7 +194,7 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "provenance": provenance(
-            graph_dirs,
+            graph_dirs, **start,
             run={"seeds": args.seeds, "epochs": args.epochs or None,
                  "split_spec": args.split, "split_info": ctx.split_info,
                  "n_graphs": len(graphs), "split": {"train": len(split.train),

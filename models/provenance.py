@@ -104,13 +104,29 @@ def environment() -> dict[str, Any]:
     return versions
 
 
-def provenance(graph_dirs: Sequence[str | Path], **extra: Any) -> dict[str, Any]:
-    """The full block: when, which code, which data, which command, plus `extra`."""
+def provenance(graph_dirs: Sequence[str | Path], git: dict[str, Any] | None = None,
+               started_utc: str | None = None, **extra: Any) -> dict[str, Any]:
+    """The full block: when, which code, which data, which command, plus `extra`.
+
+    Pass `git` and `started_utc` from `run_start()`, captured before the work
+    begins.  Reading them at write time records whatever the tree looks like
+    when the run *ends*, which is a different commit if anyone commits during a
+    45-minute training run -- the file would then name code that never ran.
+    """
     return {
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "git": git_state(),
+        "started_utc": started_utc,
+        "git": git if git is not None else git_state(),
         "command": " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]),
         "environment": environment(),
         "datasets": [dataset_provenance(d) for d in graph_dirs],
         **extra,
+    }
+
+
+def run_start() -> dict[str, Any]:
+    """Snapshot the code state before a long run, for `provenance()` afterwards."""
+    return {
+        "git": git_state(),
+        "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
