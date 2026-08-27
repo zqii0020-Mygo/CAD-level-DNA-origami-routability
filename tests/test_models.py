@@ -21,6 +21,7 @@ from models.data import (  # noqa: E402
     make_split,
     to_pyg_list,
 )
+from models.data import build_split, holdout_shape_split, size_extrapolation_split  # noqa: E402
 from models.provenance import dataset_provenance, git_state, provenance  # noqa: E402
 from models.train import DatasetContext, score_sliced, slice_masks  # noqa: E402
 from models.metrics import (  # noqa: E402
@@ -228,6 +229,64 @@ def test_size_stratified_correlation_cannot_be_won_by_size():
     size_pred = base.predict(sizes)
     within = stratified_spearman(y, size_pred, bins)
     assert np.isnan(within) or abs(within) < 1e-9, "the size baseline scored inside its own bin"
+
+
+# ------------------------------------------------------------ extrapolation splits
+def test_holdout_shape_split_hides_the_shape():
+    graphs = _tiny_dataset(60)
+    shape = "polyhedron"
+    if not any(str(g.meta["shape"]) == shape for g in graphs):
+        return
+    split, info = holdout_shape_split(graphs, shape, seed=0)
+    assert info["kind"] == "holdout-shape" and info["held_out"] == shape
+    for i in split.train + split.val:
+        assert str(graphs[i].meta["shape"]) != shape, "the held-out shape leaked into training"
+    assert {str(graphs[i].meta["shape"]) for i in split.test} == {shape}
+    # validation must come from the training region, not the held-out one
+    assert split.val and not (set(split.val) & set(split.test))
+
+
+def test_size_split_is_a_strict_extrapolation():
+    graphs = _tiny_dataset(60)
+    split, info = size_extrapolation_split(graphs, quantile=0.7, seed=0)
+    assert info["kind"] == "size-extrapolation"
+    train_max = max(graph_size(graphs[i]) for i in split.train + split.val)
+    test_min = min(graph_size(graphs[i]) for i in split.test)
+    assert train_max < test_min, "the test set is not bigger than everything trained on"
+    assert info["train_size_max"] <= train_max
+
+
+def test_ood_split_drops_oversampled_designs_inside_the_test_region():
+    """A rare draw in the held-out region cannot be used at all.
+
+    It may not be test data (it is not iid) and it may not be training data
+    (that shows the model the region the split exists to hide).
+    """
+    graphs = _tiny_dataset(60)
+    shape = "polyhedron"
+    marked = [g for g in graphs if str(g.meta["shape"]) == shape]
+    if len(marked) < 2:
+        return
+    marked[0].meta["sampling"] = "rare:timeout"
+    split, info = holdout_shape_split(graphs, shape, seed=0)
+    assert info["n_dropped_rare_in_test_region"] == 1
+    kept = set(split.train + split.val + split.test)
+    assert len(kept) == len(graphs) - 1
+    for i in split.train + split.val:
+        assert str(graphs[i].meta["shape"]) != shape
+
+
+def test_build_split_dispatches_and_rejects_nonsense():
+    graphs = _tiny_dataset(40)
+    for spec in ("random", "size:0.75"):
+        split, info = build_split(graphs, spec, seed=0)
+        assert split.test and info["kind"] in ("random", "size-extrapolation")
+    try:
+        build_split(graphs, "nonsense:1")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unknown split spec must not silently become random")
 
 
 # ----------------------------------------------------------------------- slices

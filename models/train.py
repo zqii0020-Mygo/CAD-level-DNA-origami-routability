@@ -17,7 +17,7 @@ number the size-only reference cannot touch.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -33,7 +33,7 @@ from .data import (
     Normaliser,
     Split,
     load_graphs,
-    make_split,
+    build_split,
     to_pyg_list,
 )
 from .metrics import (
@@ -56,6 +56,7 @@ class DatasetContext:
     """What the dataset -- not the model -- decides: class slots and cost scale."""
     class_map: ClassMap
     cost_baseline: CostBaseline
+    split_info: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -370,18 +371,21 @@ def reference_baselines_sliced(pred: dict[str, np.ndarray],
     return out
 
 
-def load_dataset(directory, split_seed: int = 0):
+def load_dataset(directory, split_seed: int = 0, split_spec: str = "random"):
     """Load, split, normalise, and fit what the dataset itself decides.
 
     `ClassMap` and `CostBaseline` are part of the dataset definition, not of a
     model, so every config in a run shares them; the cost baseline sees only the
-    training split.
+    training split.  `split_spec` is `random`, `shape:<name>` or
+    `size:<quantile>` -- the last two hold out a *region* of the design space,
+    which is the difference between a surrogate and a curve fit.
     """
     graphs = load_graphs(directory)
-    split = make_split(graphs, seed=split_seed)
+    split, split_info = build_split(graphs, split_spec, seed=split_seed)
     Normaliser.fit(graphs, split.train).apply(graphs)
     ctx = DatasetContext(
         class_map=ClassMap.fit(graphs),
         cost_baseline=CostBaseline.fit(graphs, split.train),
+        split_info=split_info,
     )
     return graphs, split, ctx

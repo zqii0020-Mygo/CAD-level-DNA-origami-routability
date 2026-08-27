@@ -100,6 +100,9 @@ def main() -> int:
     ap.add_argument("--graphs", default="data/designs_v1_graphs",
                     help="graph directory, or several comma-separated")
     ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--split", default="random",
+                    help="random | shape:<name> | size:<quantile> -- the last two hold out "
+                         "a region of the design space instead of a random sample")
     ap.add_argument("--epochs", type=int, default=0, help="override config epochs")
     ap.add_argument("--only", default=None, help="comma-separated config names")
     ap.add_argument("--out", type=Path, default=Path("results/baseline.json"))
@@ -121,9 +124,11 @@ def main() -> int:
     ctx = None
 
     for seed in range(args.seeds):
-        graphs, split, ctx = load_dataset(graph_dirs, split_seed=seed)
+        graphs, split, ctx = load_dataset(graph_dirs, split_seed=seed,
+                                          split_spec=args.split)
         if seed == 0:
             print(f"{len(graphs)} graphs from {', '.join(graph_dirs)}   {split}")
+            print(f"split: {ctx.split_info}")
             print(f"failure classes: {ctx.class_map.n} used ({', '.join(ctx.class_map.names)})"
                   + (f"; dropped as empty: {', '.join(ctx.class_map.dropped)}"
                      if ctx.class_map.dropped else ""))
@@ -188,6 +193,7 @@ def main() -> int:
         "provenance": provenance(
             graph_dirs,
             run={"seeds": args.seeds, "epochs": args.epochs or None,
+                 "split_spec": args.split, "split_info": ctx.split_info,
                  "n_graphs": len(graphs), "split": {"train": len(split.train),
                                                     "val": len(split.val),
                                                     "test": len(split.test)}},

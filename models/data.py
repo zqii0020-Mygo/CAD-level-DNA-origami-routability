@@ -24,7 +24,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -98,6 +98,114 @@ def make_split(graphs: list[HeteroGraph], seed: int = 0,
         val += idx[n_tr:n_tr + n_va]
         test += idx[n_tr + n_va:]
     return Split(sorted(train), sorted(val), sorted(test))
+
+
+def _stratified_pool_split(graphs: list[HeteroGraph], pool: list[int], seed: int,
+                           val_frac: float) -> tuple[list[int], list[int]]:
+    """Split an in-distribution pool into train / val, stratified by shape."""
+    by_shape: dict[str, list[int]] = {}
+    forced_train: list[int] = []
+    for i in pool:
+        g = graphs[i]
+        if str(g.meta.get("sampling", "iid")) != "iid":
+            forced_train.append(i)          # rare draws never go into validation
+            continue
+        by_shape.setdefault(str(g.meta.get("shape", "?")), []).append(i)
+
+    rng = random.Random(seed)
+    train, val = list(forced_train), []
+    for shape in sorted(by_shape):
+        idx = sorted(by_shape[shape])
+        rng.shuffle(idx)
+        n_va = int(round(val_frac * len(idx)))
+        val += idx[:n_va]
+        train += idx[n_va:]
+    return sorted(train), sorted(val)
+
+
+def make_ood_split(graphs: list[HeteroGraph], is_test, seed: int = 0,
+                   val_frac: float = 0.176) -> tuple[Split, dict[str, Any]]:
+    """Split where the test set is a *region* of the design space, not a sample.
+
+    `is_test(graph)` selects the held-out region -- one shape family, or every
+    design above a size threshold.  Three rules make it an honest extrapolation
+    test rather than a relabelled random split:
+
+    - validation comes from the training region, never the held-out one.  You
+      do not get to tune on the distribution you are claiming to extrapolate to.
+    - oversampled (`rare:`) designs can never be test data, since they are not
+      iid.
+    - a `rare:` design that falls *inside* the held-out region is dropped
+      entirely rather than used for training: keeping it would show the model
+      exactly the region the split exists to hide.
+
+    Dropped designs are counted and reported, not silently discarded.
+    """
+    test: list[int] = []
+    dropped: list[int] = []
+    pool: list[int] = []
+    for i, g in enumerate(graphs):
+        iid = str(g.meta.get("sampling", "iid")) == "iid"
+        if is_test(g):
+            (test if iid else dropped).append(i)
+        else:
+            pool.append(i)
+    train, val = _stratified_pool_split(graphs, pool, seed, val_frac)
+    info = {
+        "n_train": len(train), "n_val": len(val), "n_test": len(test),
+        "n_dropped_rare_in_test_region": len(dropped),
+    }
+    return Split(train, val, sorted(test)), info
+
+
+def holdout_shape_split(graphs: list[HeteroGraph], shape: str, seed: int = 0
+                        ) -> tuple[Split, dict[str, Any]]:
+    """Train on three shape families, test on the fourth."""
+    split, info = make_ood_split(graphs, lambda g: str(g.meta.get("shape")) == shape, seed)
+    info.update({"kind": "holdout-shape", "held_out": shape})
+    if not split.test:
+        raise ValueError(f"no designs with shape {shape!r}")
+    return split, info
+
+
+def size_extrapolation_split(graphs: list[HeteroGraph], quantile: float = 0.8,
+                             seed: int = 0) -> tuple[Split, dict[str, Any]]:
+    """Train on the small designs, test on the large ones.
+
+    The threshold is a quantile of the whole dataset's cylinder counts, so the
+    test set is the top `1 - quantile` by size: designs strictly bigger than
+    anything the model was trained on.
+    """
+    sizes = np.array([graph_size(g) for g in graphs], dtype=float)
+    thr = float(np.quantile(sizes, quantile))
+    split, info = make_ood_split(graphs, lambda g: graph_size(g) > thr, seed)
+    train_sizes = [graph_size(graphs[i]) for i in split.train]
+    test_sizes = [graph_size(graphs[i]) for i in split.test]
+    info.update({
+        "kind": "size-extrapolation", "quantile": quantile, "threshold_cylinders": thr,
+        "train_size_max": max(train_sizes) if train_sizes else 0,
+        "test_size_min": min(test_sizes) if test_sizes else 0,
+        "test_size_max": max(test_sizes) if test_sizes else 0,
+    })
+    if not split.test:
+        raise ValueError(f"quantile {quantile} leaves no designs above {thr}")
+    return split, info
+
+
+def build_split(graphs: list[HeteroGraph], spec: str = "random", seed: int = 0
+                ) -> tuple[Split, dict[str, Any]]:
+    """`random` | `shape:<name>` | `size:<quantile>`."""
+    if spec in ("", "random"):
+        split = make_split(graphs, seed=seed)
+        return split, {"kind": "random", "seed": seed, "n_train": len(split.train),
+                       "n_val": len(split.val), "n_test": len(split.test),
+                       "n_dropped_rare_in_test_region": 0}
+    kind, _, arg = spec.partition(":")
+    if kind == "shape":
+        return holdout_shape_split(graphs, arg, seed=seed)
+    if kind == "size":
+        return size_extrapolation_split(graphs, float(arg or 0.8), seed=seed)
+    raise ValueError(f"unknown split spec {spec!r}; use random | shape:<name> | size:<quantile>")
 
 
 @dataclass
