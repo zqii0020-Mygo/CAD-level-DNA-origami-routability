@@ -99,12 +99,14 @@ scripts/
   gen_designs.py    sample N designs into a directory + index.csv
   route_designs.py  label a directory of designs -> labels.csv
   build_graphs.py   designs + labels.csv -> one .npz per graph + graphs_index.csv
-  train_baseline.py train and compare the baselines -> baseline_results.json
+  train_baseline.py train and compare the baselines -> results/*.json
 models/
   data.py        loading, the split, normalisation, the class map, the cost baseline
   metrics.py     balanced accuracy, AUC, macro F1, (stratified) Spearman, MAE
   nets.py        GraphMLP (graph-level features only) and HeteroGNN
-  train.py       the multi-task loop, the scoring, and the reference baselines
+  train.py       the multi-task loop, the test-set slicing, and the references
+  provenance.py  code revision + dataset digests stamped into every results file
+results/         tracked metric tables (data/ is not: it is reproducible from a seed)
 tests/
   test_generator.py
   test_routing.py
@@ -120,7 +122,7 @@ for t in tests/test_*.py; do python "$t"; done   # no pytest needed
 python scripts/gen_designs.py   --n 1000 --out data/designs_v0
 python scripts/route_designs.py --designs data/designs_v0
 python scripts/build_graphs.py  --designs data/designs_v0   # -> data/designs_v0_graphs
-python scripts/train_baseline.py --graphs data/designs_v0_graphs --seeds 3
+python scripts/train_baseline.py --graphs data/designs_v1_graphs --seeds 3     --out results/baseline_v1.json
 
 # top the thin failure classes up with rejection-sampled designs, marked
 # `rare:<class>` so they stay out of validation and test
@@ -225,8 +227,27 @@ design that did not fail.
 ## The surrogate
 
 `scripts/train_baseline.py` trains four configurations over 3 seeds and reports
-test metrics next to the three reference rows. Numbers below: 10,000 iid
-designs, 20 epochs, ~1,500 test designs, mean +- sd over seeds.
+test metrics next to the three reference rows, on three slices of the test set:
+
+| slice | what it is | why |
+|---|---|---|
+| `all` | every test design | the headline number, and the misleading one |
+| `precheck-decided` | a fatal precheck already answered it | the label is free -- any model that reproduces `precheck.py` gets it right |
+| `precheck-undecided` | the label required the DFS | **the only slice where a surrogate is worth anything** |
+
+Roughly a third of the designs are decided by the precheck, so a model can bank
+that third and look good on `all` while having learned nothing but the rules.
+The slicing is what makes that visible. `precheck-decided` reports no binary
+score at all: every design in it is unroutable, so discrimination is undefined
+and an all-negative predictor would otherwise score 1.000 for saying nothing.
+
+Every results file carries a provenance block -- commit, whether the tree was
+dirty, dataset digests (the SHA-1 of `labels.csv` and of the graph manifest),
+seed range, and library versions -- so a table can be traced to the code and
+the data that produced it.
+
+Numbers below: 10,000 iid designs, 20 epochs, ~1,500 test designs, mean +- sd
+over seeds.
 
 | model | routable bacc | hamilton bacc | failure macro F1 | cost rho (within size) | cost MAE |
 |---|---|---|---|---|---|

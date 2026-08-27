@@ -1,3 +1,6 @@
+# Generated datasets: designs, labels and graphs (~150 MB) are reproducible
+# from a seed, so they stay out of git.  results/ is the opposite: small
+# JSON metric tables that are the evidence for the README, and *are* tracked.
 data/
 __pycache__/
 *.pyc

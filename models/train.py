@@ -178,6 +178,45 @@ def score(pred: dict[str, np.ndarray], ctx: "DatasetContext | None" = None) -> d
     }
 
 
+SLICES = ("all", "precheck_decided", "precheck_undecided")
+
+
+def slice_masks(pred: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Split a prediction set by whether the precheck already decided the design.
+
+    A fatal precheck is an *exact* obstruction, so those labels are free: any
+    model that reproduces the rules gets them right, and the rules are a page of
+    `precheck.py`.  The designs that reach the DFS are the ones whose label cost
+    a search, and they are the only slice where a surrogate can be worth
+    anything.  Reporting only the whole test set lets a model bank the free
+    half, which is exactly the objection this slicing exists to answer.
+
+    The mask uses `searched`, which is "the precheck was not fatal" -- a
+    quantity the precheck computes in O(V + E) without any search, so slicing
+    on it is something a deployment can do too.
+    """
+    searched = pred["searched"] > 0.5
+    return {
+        "all": np.ones(searched.shape, dtype=bool),
+        "precheck_decided": ~searched,
+        "precheck_undecided": searched,
+    }
+
+
+def _subset(pred: dict[str, np.ndarray], m: np.ndarray) -> dict[str, np.ndarray]:
+    return {k: v[m] for k, v in pred.items()}
+
+
+def score_sliced(pred: dict[str, np.ndarray], ctx: "DatasetContext | None" = None
+                 ) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
+    for name, m in slice_masks(pred).items():
+        s = score(_subset(pred, m), ctx)
+        s["n"] = float(m.sum())
+        out[name] = s
+    return out
+
+
 def per_class_f1(pred: dict[str, np.ndarray], ctx: "DatasetContext") -> dict[str, tuple[float, int]]:
     """Failure-class F1 by name -- the thin classes are invisible in the macro."""
     got = class_f1s(pred["y_class"].astype(float), pred["hat_class"].astype(float),
@@ -251,7 +290,12 @@ def run(cfg: Config, graphs, split: Split, ctx: DatasetContext, seed: int = 0,
         "best_epoch": best[2] + 1,
         "val_selection": best[0],
         "test": score(test_pred, ctx),
+        "test_sliced": score_sliced(test_pred, ctx),
         "test_class_f1": per_class_f1(test_pred, ctx),
+        "test_class_f1_sliced": {
+            name: per_class_f1(_subset(test_pred, m), ctx)
+            for name, m in slice_masks(test_pred).items()
+        },
         "n_params": sum(p.numel() for p in model.parameters()),
         "pred": test_pred,
     }
@@ -305,6 +349,25 @@ def reference_baselines(pred: dict[str, np.ndarray],
             "cost_mae": mae(y_cost, size_only),
         },
     }
+
+
+def reference_baselines_sliced(pred: dict[str, np.ndarray],
+                               ctx: DatasetContext | None = None
+                               ) -> dict[str, dict[str, dict[str, float]]]:
+    """The reference rows, per slice.
+
+    `precheck-rule` is the row to watch: on the undecided slice it calls every
+    design routable, so its balanced accuracy collapses to 0.5.  That is the
+    honest statement of what the rules are worth where they have not already
+    answered, and the bar a surrogate actually has to clear.
+    """
+    out: dict[str, dict[str, dict[str, float]]] = {}
+    for name, m in slice_masks(pred).items():
+        sub = _subset(pred, m)
+        out[name] = reference_baselines(sub, ctx)
+        for row in out[name].values():
+            row["n"] = float(m.sum())
+    return out
 
 
 def load_dataset(directory, split_seed: int = 0):

@@ -21,6 +21,8 @@ from models.data import (  # noqa: E402
     make_split,
     to_pyg_list,
 )
+from models.provenance import dataset_provenance, git_state, provenance  # noqa: E402
+from models.train import DatasetContext, score_sliced, slice_masks  # noqa: E402
 from models.metrics import (  # noqa: E402
     balanced_accuracy,
     mae,
@@ -226,6 +228,83 @@ def test_size_stratified_correlation_cannot_be_won_by_size():
     size_pred = base.predict(sizes)
     within = stratified_spearman(y, size_pred, bins)
     assert np.isnan(within) or abs(within) < 1e-9, "the size baseline scored inside its own bin"
+
+
+# ----------------------------------------------------------------------- slices
+def _fake_pred(searched, routable, klass):
+    n = len(searched)
+    z = np.zeros(n)
+    return {
+        "searched": np.asarray(searched, dtype=float),
+        "timeout": z.copy(),
+        "y_routable": np.asarray(routable, dtype=float),
+        "p_routable": np.asarray(routable, dtype=float),
+        "y_hamilton": np.asarray(routable, dtype=float),
+        "p_hamilton": np.asarray(routable, dtype=float),
+        "y_class": np.asarray(klass, dtype=float),
+        "hat_class": np.asarray(klass, dtype=float),
+        "y_cost": z.copy(),
+        "y_cost_resid": z.copy(),
+        "cost_base": z.copy(),
+        "p_cost": z.copy(),
+        "size": np.arange(n, dtype=float),
+        "precheck_ok": np.asarray(searched, dtype=float),
+    }
+
+
+def test_slices_partition_the_test_set():
+    pred = _fake_pred([1, 0, 1, 0, 1], [1, 0, 0, 0, 1], [0, 1, 2, 1, 0])
+    m = slice_masks(pred)
+    assert set(m) == {"all", "precheck_decided", "precheck_undecided"}
+    assert m["all"].all()
+    assert not (m["precheck_decided"] & m["precheck_undecided"]).any()
+    assert (m["precheck_decided"] | m["precheck_undecided"]).all()
+    # the decided slice is exactly the designs the search never saw
+    assert not (pred["searched"][m["precheck_decided"]] > 0.5).any()
+
+
+def test_decided_slice_reports_no_binary_score():
+    """Every precheck-decided design is unroutable, so discrimination is undefined.
+
+    Reporting the surviving recall there would hand an all-negative predictor a
+    1.000 for saying nothing.
+    """
+    pred = _fake_pred([1, 1, 0, 0], [1, 0, 0, 0], [0, 3, 1, 2])
+    graphs = _tiny_dataset(12)
+    ctx = DatasetContext(class_map=ClassMap.fit(graphs),
+                         cost_baseline=CostBaseline.fit(graphs, list(range(12)), n_bins=2))
+    sliced = score_sliced(pred, ctx)
+    assert sliced["all"]["n"] == 4
+    assert sliced["precheck_decided"]["n"] == 2
+    assert sliced["precheck_undecided"]["n"] == 2
+    assert np.isnan(sliced["precheck_decided"]["routable_bacc"])
+    assert not np.isnan(sliced["precheck_undecided"]["routable_bacc"])
+    # the failure class is still scoreable on the decided slice
+    assert not np.isnan(sliced["precheck_decided"]["failure_acc"])
+
+
+# ------------------------------------------------------------------ provenance
+def test_provenance_identifies_code_and_data():
+    block = provenance(["data/designs_v0_graphs"], run={"seeds": 1})
+    assert set(block) >= {"created_utc", "git", "command", "environment", "datasets", "run"}
+    assert block["git"]["commit"] is None or len(block["git"]["commit"]) == 40
+    assert block["environment"]["python"]
+    ds = block["datasets"][0]
+    if ds["n_graphs"]:                      # skip when the dataset is not built
+        assert ds["graphs_index_sha1"], "a dataset must be identified by content, not by name"
+        assert ds["sampling"], "the iid / rare breakdown is part of what produced the table"
+
+
+def test_git_state_reports_dirtiness():
+    st = git_state()
+    assert set(st) == {"commit", "branch", "describe", "dirty"}
+    # None means git did not answer; it must never silently look clean
+    assert st["dirty"] in (True, False, None)
+
+
+def test_dataset_provenance_survives_a_missing_directory():
+    ds = dataset_provenance("data/does_not_exist_graphs")
+    assert ds["n_graphs"] == 0 and ds["graphs_index_sha1"] is None
 
 
 if __name__ == "__main__":

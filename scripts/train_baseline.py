@@ -1,9 +1,24 @@
 """Train and compare the baseline surrogates.
 
-    python scripts/train_baseline.py --graphs data/designs_v0_graphs --seeds 3
+    python scripts/train_baseline.py --graphs data/designs_v1_graphs --seeds 3
+    python scripts/train_baseline.py \
+        --graphs data/designs_v1_graphs,data/designs_v1_rare_graphs \
+        --out results/baseline_v1_rare.json
 
-Reports test metrics for each configuration next to two reference points: the
-majority-class predictor and the pipeline's own precheck verdict.
+Reports test metrics for each configuration next to three reference points --
+the majority-class predictor, the pipeline's own precheck verdict, and a
+size-only cost predictor -- on three slices of the test set:
+
+    all                   every test design
+    precheck-decided      a fatal precheck already answered: the label is free
+    precheck-undecided    the label required the DFS
+
+The third slice is the one that decides whether a surrogate is worth anything.
+A model that has merely learned `precheck.py` scores well on `all` by banking
+the free half; on `precheck-undecided` it has nothing left to bank.
+
+The results JSON carries a provenance block (code revision, dataset digests,
+environment) so the table can be traced back to what produced it.
 """
 
 from __future__ import annotations
@@ -18,7 +33,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from models.train import CONFIGS, load_dataset, reference_baselines, run  # noqa: E402
+from models.provenance import provenance  # noqa: E402
+from models.train import (  # noqa: E402
+    CONFIGS,
+    SLICES,
+    load_dataset,
+    reference_baselines_sliced,
+    run,
+)
 
 METRIC_ORDER = [
     "routable_bacc", "routable_auc",
@@ -27,21 +49,64 @@ METRIC_ORDER = [
     "cost_rho", "cost_rho_within", "cost_mae",
 ]
 
+SLICE_TITLES = {
+    "all": "all test designs",
+    "precheck_decided": "precheck-decided -- a fatal exact obstruction, the label is free",
+    "precheck_undecided": "precheck-undecided -- the label required the search  <<< the one that matters",
+}
 
-def fmt(v: float) -> str:
+
+def fmt(v: float | None) -> str:
     return "  --  " if v is None or np.isnan(v) else f"{v:.3f}"
+
+
+def mean_std(values) -> tuple[float, float]:
+    a = np.array(list(values), dtype=float)
+    if not a.size or np.isnan(a).all():
+        return float("nan"), float("nan")
+    return float(np.nanmean(a)), float(np.nanstd(a))
+
+
+def print_metric_table(slice_name: str, n: int, refs: dict, summary: dict, configs) -> None:
+    head = f"{'model':<16}" + "".join(f"{m:>16}" for m in METRIC_ORDER)
+    print(f"\n=== {SLICE_TITLES[slice_name]}   (n = {n})")
+    print(head)
+    print("-" * len(head))
+    for name, ref in refs.items():
+        print(f"{name:<16}" + "".join(f"{fmt(ref.get(m)):>16}" for m in METRIC_ORDER))
+    print("-" * len(head))
+    for cfg in configs:
+        row = f"{cfg.name:<16}"
+        for m in METRIC_ORDER:
+            mu, sd = summary[cfg.name][m]["mean"], summary[cfg.name][m]["std"]
+            row += ("  --  ".rjust(16) if np.isnan(mu) else f"{mu:.3f}+-{sd:.2f}".rjust(16))
+        print(row)
+
+
+def print_class_table(slice_name: str, names, support, per_class, configs) -> None:
+    if not names:
+        return
+    head = f"{'failure F1':<16}" + "".join(f"{n:>16}" for n in names)
+    print(f"\n--- per-class failure F1, {slice_name}")
+    print(head)
+    print(f"{'test support':<16}" + "".join(f"{support.get(n, 0):>16}" for n in names))
+    print("-" * len(head))
+    for cfg in configs:
+        print(f"{cfg.name:<16}" + "".join(fmt(per_class[cfg.name].get(n)).rjust(16) for n in names))
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--graphs", type=Path, default=Path("data/designs_v0_graphs"))
+    ap.add_argument("--graphs", default="data/designs_v1_graphs",
+                    help="graph directory, or several comma-separated")
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--epochs", type=int, default=0, help="override config epochs")
     ap.add_argument("--only", default=None, help="comma-separated config names")
-    ap.add_argument("--out", type=Path, default=Path("data/baseline_results.json"))
+    ap.add_argument("--out", type=Path, default=Path("results/baseline.json"))
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
+    graph_dirs = [d for d in str(args.graphs).split(",") if d]
     configs = list(CONFIGS)
     if args.only:
         wanted = {s.strip() for s in args.only.split(",")}
@@ -53,82 +118,92 @@ def main() -> int:
     t0 = time.perf_counter()
     results: dict[str, list[dict]] = {}
     refs = None
-
     ctx = None
+
     for seed in range(args.seeds):
-        graphs, split, ctx = load_dataset(str(args.graphs), split_seed=seed)
+        graphs, split, ctx = load_dataset(graph_dirs, split_seed=seed)
         if seed == 0:
-            print(f"{len(graphs)} graphs   {split}")
-            print(f"failure classes: {ctx.class_map.n} used "
-                  f"({', '.join(ctx.class_map.names)})"
+            print(f"{len(graphs)} graphs from {', '.join(graph_dirs)}   {split}")
+            print(f"failure classes: {ctx.class_map.n} used ({', '.join(ctx.class_map.names)})"
                   + (f"; dropped as empty: {', '.join(ctx.class_map.dropped)}"
                      if ctx.class_map.dropped else ""))
         for cfg in configs:
             r = run(cfg, graphs, split, ctx, seed=seed, verbose=args.verbose)
             results.setdefault(cfg.name, []).append(r)
             if refs is None:
-                refs = reference_baselines(r["pred"], ctx)
+                refs = reference_baselines_sliced(r["pred"], ctx)
+            und = r["test_sliced"]["precheck_undecided"]
             print(f"  seed {seed}  {cfg.name:<14} "
-                  + "  ".join(f"{k.split('_')[-1]}={fmt(r['test'][k])}" for k in METRIC_ORDER[:6])
-                  + f"   ({time.perf_counter() - t0:.0f}s)", flush=True)
+                  f"all: bacc={fmt(r['test']['routable_bacc'])} f1={fmt(r['test']['failure_f1'])}"
+                  f"   undecided: bacc={fmt(und['routable_bacc'])} f1={fmt(und['failure_f1'])}"
+                  f"   ({time.perf_counter() - t0:.0f}s)", flush=True)
 
-    head = f"{'model':<16}" + "".join(f"{m:>16}" for m in METRIC_ORDER)
-    print("\n" + head)
-    print("-" * len(head))
-    for name, ref in (refs or {}).items():
-        print(f"{name:<16}" + "".join(f"{fmt(ref[m]):>16}" for m in METRIC_ORDER))
-    print("-" * len(head))
-    summary = {}
-    for cfg in configs:
-        runs = results[cfg.name]
-        row = f"{cfg.name:<16}"
-        summary[cfg.name] = {}
-        for m in METRIC_ORDER:
-            vals = np.array([r["test"][m] for r in runs], dtype=float)
-            mu, sd = float(np.nanmean(vals)), float(np.nanstd(vals))
-            summary[cfg.name][m] = {"mean": mu, "std": sd}
-            row += f"{fmt(mu)}+-{sd:.2f}".rjust(16)
-        print(row)
-    print("-" * len(head))
+    # ---------------------------------------------------------------- aggregate
+    payload_slices: dict[str, dict] = {}
+    for sl in SLICES:
+        summary = {
+            cfg.name: {
+                m: dict(zip(("mean", "std"),
+                            mean_std(r["test_sliced"][sl][m] for r in results[cfg.name])))
+                for m in METRIC_ORDER
+            }
+            for cfg in configs
+        }
+        n = int(results[configs[0].name][0]["test_sliced"][sl]["n"])
+        print_metric_table(sl, n, refs[sl], summary, configs)
+
+        names = [c for c in ctx.class_map.names
+                 if any(c in r["test_class_f1_sliced"][sl] for r in results[configs[0].name])]
+        support = {}
+        for name in names:
+            got = [r["test_class_f1_sliced"][sl].get(name) for r in results[configs[0].name]]
+            support[name] = int(np.mean([v[1] for v in got if v])) if any(got) else 0
+        per_class = {
+            cfg.name: {
+                name: mean_std(v[0] for v in
+                               (r["test_class_f1_sliced"][sl].get(name) for r in results[cfg.name])
+                               if v)[0]
+                for name in names
+            }
+            for cfg in configs
+        }
+        if sl != "precheck_decided":
+            print_class_table(sl, names, support, per_class, configs)
+
+        payload_slices[sl] = {
+            "n": n,
+            "reference": refs[sl],
+            "results": summary,
+            "class_f1": per_class,
+            "class_support": support,
+        }
+
+    print()
     for cfg in configs:
         print(f"  {cfg.name:<14} {cfg.note}")
 
-    # per-class F1: the thin classes are what the macro average hides
-    names = list(ctx.class_map.names) if ctx else []
-    support = {}
-    for name in names:
-        vals = [r["test_class_f1"].get(name) for r in results[configs[0].name]]
-        support[name] = int(np.mean([v[1] for v in vals if v])) if any(vals) else 0
-    chead = f"{'failure F1':<16}" + "".join(f"{n:>16}" for n in names)
-    print("\n" + chead)
-    print(f"{'test support':<16}" + "".join(f"{support[n]:>16}" for n in names))
-    print("-" * len(chead))
-    per_class = {}
-    for cfg in configs:
-        row = f"{cfg.name:<16}"
-        per_class[cfg.name] = {}
-        for n in names:
-            vals = [r["test_class_f1"].get(n) for r in results[cfg.name]]
-            vals = [v[0] for v in vals if v]
-            mu = float(np.mean(vals)) if vals else float("nan")
-            per_class[cfg.name][n] = mu
-            row += fmt(mu).rjust(16)
-        print(row)
-
+    # ------------------------------------------------------------------- write
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps({
-        "n_graphs": len(graphs),
-        "classes": {"used": ctx.class_map.names, "dropped": ctx.class_map.dropped} if ctx else {},
-        "reference": refs,
+    payload = {
+        "provenance": provenance(
+            graph_dirs,
+            run={"seeds": args.seeds, "epochs": args.epochs or None,
+                 "n_graphs": len(graphs), "split": {"train": len(split.train),
+                                                    "val": len(split.val),
+                                                    "test": len(split.test)}},
+        ),
+        "classes": {"used": ctx.class_map.names, "dropped": ctx.class_map.dropped},
         "configs": {c.name: {"model": c.model, "include_precheck": c.include_precheck,
                              "hidden": c.hidden, "layers": c.layers, "epochs": c.epochs,
                              "note": c.note} for c in configs},
-        "results": summary,
-        "class_f1": per_class,
-        "class_support": support,
         "n_params": {c.name: results[c.name][0]["n_params"] for c in configs},
-    }, indent=2), encoding="utf-8")
+        "slices": payload_slices,
+    }
+    args.out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    git = payload["provenance"]["git"]
     print(f"\nwrote {args.out}   ({time.perf_counter() - t0:.0f}s)")
+    print(f"code: {git['describe']}"
+          + ("   WARNING: uncommitted changes in the tree" if git["dirty"] else ""))
     return 0
 
 

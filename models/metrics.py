@@ -22,7 +22,13 @@ def accuracy(y: np.ndarray, p: np.ndarray, thr: float = 0.5) -> float:
 
 
 def balanced_accuracy(y: np.ndarray, p: np.ndarray, thr: float = 0.5) -> float:
-    """Mean per-class recall: the number a majority-class predictor cannot game."""
+    """Mean per-class recall: the number a majority-class predictor cannot game.
+
+    Undefined -- NaN, as for `roc_auc` -- when only one class is present.  That
+    happens on the precheck-decided slice, where every design is unroutable:
+    reporting the surviving recall there would score an all-negative predictor
+    1.000 for saying nothing.
+    """
     y, p = _clean(y, p)
     if not len(y):
         return float("nan")
@@ -32,7 +38,7 @@ def balanced_accuracy(y: np.ndarray, p: np.ndarray, thr: float = 0.5) -> float:
         m = (y >= 0.5) == bool(cls)
         if m.sum():
             recalls.append(float((hat[m] == bool(cls)).mean()))
-    return float(np.mean(recalls)) if recalls else float("nan")
+    return float(np.mean(recalls)) if len(recalls) == 2 else float("nan")
 
 
 def roc_auc(y: np.ndarray, p: np.ndarray) -> float:
