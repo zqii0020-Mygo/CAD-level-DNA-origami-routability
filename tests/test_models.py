@@ -354,11 +354,13 @@ def test_provenance_identifies_code_and_data():
         assert ds["sampling"], "the iid / rare breakdown is part of what produced the table"
 
 
-def test_git_state_reports_dirtiness():
+def test_git_state_separates_modified_from_untracked():
     st = git_state()
-    assert set(st) == {"commit", "branch", "describe", "dirty"}
+    assert set(st) == {"commit", "branch", "describe", "dirty", "untracked"}
     # None means git did not answer; it must never silently look clean
     assert st["dirty"] in (True, False, None)
+    # an unadded results/ directory is not code that escaped a commit
+    assert st["untracked"] is None or st["untracked"] >= 0
 
 
 def test_dataset_provenance_survives_a_missing_directory():

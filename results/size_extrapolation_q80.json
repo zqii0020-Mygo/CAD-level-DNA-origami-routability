@@ -1,0 +1,817 @@
+{
+  "provenance": {
+    "created_utc": "2026-08-27T07:22:49+00:00",
+    "started_utc": "2026-08-27T07:03:13+00:00",
+    "git": {
+      "commit": "11ffa72b94c64bf9ac64891ba57174b194c1ec93",
+      "branch": "evidence/slicing-and-provenance",
+      "describe": "11ffa72",
+      "dirty": true
+    },
+    "command": "train_baseline.py --graphs data/designs_v1_graphs --seeds 2 --epochs 20 --split size:0.8 --out results/size_extrapolation_q80.json",
+    "environment": {
+      "python": "3.13.7",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "numpy": "2.4.0",
+      "networkx": "3.6.1",
+      "torch": "2.10.0+cpu",
+      "torch_geometric": "2.8.0.post1"
+    },
+    "datasets": [
+      {
+        "graphs_dir": "data/designs_v1_graphs",
+        "n_graphs": 10000,
+        "graphs_index_sha1": "ace7a04ab75cb5190839f681a7b59f53c466b239",
+        "sampling": {
+          "iid": 10000
+        },
+        "shapes": {
+          "brick": 2531,
+          "plate": 2491,
+          "polygon_ring": 2437,
+          "polyhedron": 2541
+        },
+        "designs_dir": "data/designs_v1",
+        "labels_sha1": "50d3910e47cbfb7330f35fe032348a19e2ec1613",
+        "seed_min": 0,
+        "seed_max": 9999,
+        "n_seeds": 10000
+      }
+    ],
+    "run": {
+      "seeds": 2,
+      "epochs": 20,
+      "split_spec": "size:0.8",
+      "split_info": {
+        "n_train": 6855,
+        "n_val": 1465,
+        "n_test": 1680,
+        "n_dropped_rare_in_test_region": 0,
+        "kind": "size-extrapolation",
+        "quantile": 0.8,
+        "threshold_cylinders": 24.0,
+        "train_size_max": 24,
+        "test_size_min": 25,
+        "test_size_max": 72
+      },
+      "n_graphs": 10000,
+      "split": {
+        "train": 6855,
+        "val": 1465,
+        "test": 1680
+      }
+    }
+  },
+  "classes": {
+    "used": [
+      "none",
+      "geometry",
+      "pairability",
+      "hamilton",
+      "timeout",
+      "staple_routing",
+      "scaffold_length"
+    ],
+    "dropped": [
+      "export"
+    ]
+  },
+  "configs": {
+    "mlp-counts": {
+      "model": "mlp",
+      "include_precheck": false,
+      "hidden": 128,
+      "layers": 3,
+      "epochs": 20,
+      "note": "graph_x only: can counting features alone predict routability?"
+    },
+    "mlp-rules": {
+      "model": "mlp",
+      "include_precheck": true,
+      "hidden": 128,
+      "layers": 3,
+      "epochs": 20,
+      "note": "graph_x + precheck_x: the exact-obstruction baseline to beat"
+    },
+    "gnn-structure": {
+      "model": "gnn",
+      "include_precheck": false,
+      "hidden": 64,
+      "layers": 3,
+      "epochs": 20,
+      "note": "message passing, no precheck block: does structure add anything?"
+    },
+    "gnn-rules": {
+      "model": "gnn",
+      "include_precheck": true,
+      "hidden": 64,
+      "layers": 3,
+      "epochs": 20,
+      "note": "message passing + precheck block: do they compose?"
+    }
+  },
+  "n_params": {
+    "mlp-counts": 53642,
+    "mlp-rules": 54922,
+    "gnn-structure": 291018,
+    "gnn-rules": 292298
+  },
+  "slices": {
+    "all": {
+      "n": 1680,
+      "reference": {
+        "majority": {
+          "routable_bacc": 0.5,
+          "routable_auc": NaN,
+          "hamilton_bacc": 0.5,
+          "hamilton_auc": NaN,
+          "failure_acc": 0.3892857142857143,
+          "failure_f1": 0.08005875872199779,
+          "cost_rho": NaN,
+          "cost_rho_within": NaN,
+          "cost_mae": NaN,
+          "n": 1680.0
+        },
+        "precheck-rule": {
+          "routable_bacc": 0.7911744266851981,
+          "routable_auc": 0.7911744266851981,
+          "hamilton_bacc": 0.5636387652665162,
+          "hamilton_auc": 0.5636387652665162,
+          "failure_acc": NaN,
+          "failure_f1": NaN,
+          "cost_rho": NaN,
+          "cost_rho_within": NaN,
+          "cost_mae": NaN,
+          "n": 1680.0
+        },
+        "size-only": {
+          "routable_bacc": NaN,
+          "routable_auc": NaN,
+          "hamilton_bacc": NaN,
+          "hamilton_auc": NaN,
+          "failure_acc": NaN,
+          "failure_f1": NaN,
+          "cost_rho": NaN,
+          "cost_rho_within": NaN,
+          "cost_mae": 2.6374166011810303,
+          "n": 1680.0
+        }
+      },
+      "results": {
+        "mlp-counts": {
+          "routable_bacc": {
+            "mean": 0.6749183244473023,
+            "std": 0.05151975640068168
+          },
+          "routable_auc": {
+            "mean": 0.8146808381800409,
+            "std": 0.03706325566106017
+          },
+          "hamilton_bacc": {
+            "mean": 0.7665869048344816,
+            "std": 0.005137779674449838
+          },
+          "hamilton_auc": {
+            "mean": 0.8833749923794427,
+            "std": 0.01854335589018269
+          },
+          "failure_acc": {
+            "mean": 0.5282738095238095,
+            "std": 0.012797619047619058
+          },
+          "failure_f1": {
+            "mean": 0.4517619325739017,
+            "std": 0.021145442264448644
+          },
+          "cost_rho": {
+            "mean": -0.11037286225581418,
+            "std": 0.029559268682432874
+          },
+          "cost_rho_within": {
+            "mean": -0.11037286225581418,
+            "std": 0.029559268682432874
+          },
+          "cost_mae": {
+            "mean": 6.594770669937134,
+            "std": 0.3178374767303467
+          }
+        },
+        "mlp-rules": {
+          "routable_bacc": {
+            "mean": 0.6608864212411224,
+            "std": 0.005365499900518711
+          },
+          "routable_auc": {
+            "mean": 0.842263097644457,
+            "std": 0.009802508081049821
+          },
+          "hamilton_bacc": {
+            "mean": 0.7645517080208905,
+            "std": 0.008996829848198495
+          },
+          "hamilton_auc": {
+            "mean": 0.8904128309862016,
+            "std": 0.0015896482350789554
+          },
+          "failure_acc": {
+            "mean": 0.5845238095238094,
+            "std": 0.013095238095238104
+          },
+          "failure_f1": {
+            "mean": 0.6221785869481207,
+            "std": 0.004084463256451454
+          },
+          "cost_rho": {
+            "mean": -0.26171396499898353,
+            "std": 0.029274945592607696
+          },
+          "cost_rho_within": {
+            "mean": -0.26171396499898353,
+            "std": 0.029274945592607696
+          },
+          "cost_mae": {
+            "mean": 7.267766952514648,
+            "std": 0.3817601203918457
+          }
+        },
+        "gnn-structure": {
+          "routable_bacc": {
+            "mean": 0.7803446665071121,
+            "std": 0.010725953650385367
+          },
+          "routable_auc": {
+            "mean": 0.9173757709797318,
+            "std": 0.021597524791017286
+          },
+          "hamilton_bacc": {
+            "mean": 0.8014961693999065,
+            "std": 0.0020458655936921866
+          },
+          "hamilton_auc": {
+            "mean": 0.9097395801581012,
+            "std": 0.01240067873762929
+          },
+          "failure_acc": {
+            "mean": 0.6369047619047619,
+            "std": 0.0011904761904761862
+          },
+          "failure_f1": {
+            "mean": 0.5979090433520303,
+            "std": 0.0031745570410061097
+          },
+          "cost_rho": {
+            "mean": 0.10198449771582528,
+            "std": 0.08848336784313858
+          },
+          "cost_rho_within": {
+            "mean": 0.10198449771582528,
+            "std": 0.08848336784313858
+          },
+          "cost_mae": {
+            "mean": 4.98456597328186,
+            "std": 0.26940464973449707
+          }
+        },
+        "gnn-rules": {
+          "routable_bacc": {
+            "mean": 0.7646158149244952,
+            "std": 0.03268896392434806
+          },
+          "routable_auc": {
+            "mean": 0.9324421350695936,
+            "std": 0.030098126003823555
+          },
+          "hamilton_bacc": {
+            "mean": 0.816612814729013,
+            "std": 0.030900851470259505
+          },
+          "hamilton_auc": {
+            "mean": 0.9441773862504826,
+            "std": 0.01226350870775672
+          },
+          "failure_acc": {
+            "mean": 0.6342261904761904,
+            "std": 0.003273809523809512
+          },
+          "failure_f1": {
+            "mean": 0.6482511801461068,
+            "std": 0.0078164834624051
+          },
+          "cost_rho": {
+            "mean": -0.10596188155166492,
+            "std": 0.014872031391037335
+          },
+          "cost_rho_within": {
+            "mean": -0.10596188155166492,
+            "std": 0.014872031391037335
+          },
+          "cost_mae": {
+            "mean": 6.628620624542236,
+            "std": 0.535947322845459
+          }
+        }
+      },
+      "class_f1": {
+        "mlp-counts": {
+          "none": 0.4694601804887688,
+          "geometry": 0.3846153846153846,
+          "pairability": 0.5639928698752229,
+          "hamilton": 0.6590312396393059,
+          "timeout": 0.0,
+          "staple_routing": 0.5028412080395664,
+          "scaffold_length": 0.5823926453590633
+        },
+        "mlp-rules": {
+          "none": 0.4930939226519337,
+          "geometry": 0.9736842105263158,
+          "pairability": 0.9927536231884058,
+          "hamilton": 0.6921234532640856,
+          "timeout": 0.0,
+          "staple_routing": 0.5893008295242932,
+          "scaffold_length": 0.6142940694818108
+        },
+        "gnn-structure": {
+          "none": 0.6710949710398086,
+          "geometry": 0.5,
+          "pairability": 0.8975694444444444,
+          "hamilton": 0.7296426895679005,
+          "timeout": 0.0,
+          "staple_routing": 0.7934540118881852,
+          "scaffold_length": 0.5936021865238732
+        },
+        "gnn-rules": {
+          "none": 0.6635724157848053,
+          "geometry": 0.8375000000000001,
+          "pairability": 0.9629060579455664,
+          "hamilton": 0.753374064198479,
+          "timeout": 0.0,
+          "staple_routing": 0.7416666666666667,
+          "scaffold_length": 0.5787390564272306
+        }
+      },
+      "class_support": {
+        "none": 241,
+        "geometry": 9,
+        "pairability": 35,
+        "hamilton": 654,
+        "timeout": 277,
+        "staple_routing": 178,
+        "scaffold_length": 286
+      }
+    },
+    "precheck_decided": {
+      "n": 234,
+      "reference": {
+        "majority": {
+          "routable_bacc": NaN,
+          "routable_auc": NaN,
+          "hamilton_bacc": NaN,
+          "hamilton_auc": NaN,
+          "failure_acc": 0.811965811965812,
+          "failure_f1": 0.29874213836477986,
+          "cost_rho": NaN,
+          "cost_rho_within": NaN,
+          "cost_mae": NaN,
+          "n": 234.0
+        },
+        "precheck-rule": {
+          "routable_bacc": NaN,
+          "routable_auc": NaN,
+          "hamilton_bacc": NaN,
+          "hamilton_auc": NaN,
+          "failure_acc": NaN,
+          "failure_f1": NaN,
+          "cost_rho": NaN,
+          "cost_rho_within": NaN,
+          "cost_mae": NaN,
+          "n": 234.0
+        },
+        "size-only": {
+          "routable_bacc": NaN,
+          "routable_auc": NaN,
+          "hamilton_bacc": NaN,
+          "hamilton_auc": NaN,
+          "failure_acc": NaN,
+          "failure_f1": NaN,
+          "cost_rho": NaN,
+          "cost_rho_within": NaN,
+          "cost_mae": NaN,
+          "n": 234.0
+        }
+      },
+      "results": {
+        "mlp-counts": {
+          "routable_bacc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "routable_auc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "hamilton_bacc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "hamilton_auc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "failure_acc": {
+            "mean": 0.46794871794871795,
+            "std": 0.002136752136752129
+          },
+          "failure_f1": {
+            "mean": 0.5189337138186243,
+            "std": 0.04164194240920588
+          },
+          "cost_rho": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "cost_rho_within": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "cost_mae": {
+            "mean": NaN,
+            "std": NaN
+          }
+        },
+        "mlp-rules": {
+          "routable_bacc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "routable_auc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "hamilton_bacc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "hamilton_auc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "failure_acc": {
+            "mean": 0.9935897435897436,
+            "std": 0.0064102564102563875
+          },
+          "failure_f1": {
+            "mean": 0.9962652798490816,
+            "std": 0.0037347201509184136
+          },
+          "cost_rho": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "cost_rho_within": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "cost_mae": {
+            "mean": NaN,
+            "std": NaN
+          }
+        },
+        "gnn-structure": {
+          "routable_bacc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "routable_auc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "hamilton_bacc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "hamilton_auc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "failure_acc": {
+            "mean": 0.8547008547008548,
+            "std": 0.021367521367521347
+          },
+          "failure_f1": {
+            "mean": 0.7685897542638007,
+            "std": 0.00771580129175492
+          },
+          "cost_rho": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "cost_rho_within": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "cost_mae": {
+            "mean": NaN,
+            "std": NaN
+          }
+        },
+        "gnn-rules": {
+          "routable_bacc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "routable_auc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "hamilton_bacc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "hamilton_auc": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "failure_acc": {
+            "mean": 0.9743589743589743,
+            "std": 0.004273504273504258
+          },
+          "failure_f1": {
+            "mean": 0.9291169572206779,
+            "std": 0.009916549784976303
+          },
+          "cost_rho": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "cost_rho_within": {
+            "mean": NaN,
+            "std": NaN
+          },
+          "cost_mae": {
+            "mean": NaN,
+            "std": NaN
+          }
+        }
+      },
+      "class_f1": {
+        "mlp-counts": {
+          "geometry": 0.3846153846153846,
+          "pairability": 0.5639928698752229,
+          "hamilton": 0.6081928869652655
+        },
+        "mlp-rules": {
+          "geometry": 1.0,
+          "pairability": 0.9927536231884058,
+          "hamilton": 0.9960422163588389
+        },
+        "gnn-structure": {
+          "geometry": 0.5,
+          "pairability": 0.8975694444444444,
+          "hamilton": 0.9081998183469573
+        },
+        "gnn-rules": {
+          "geometry": 0.8375000000000001,
+          "pairability": 0.9629060579455664,
+          "hamilton": 0.9869448137164671
+        }
+      },
+      "class_support": {
+        "geometry": 9,
+        "pairability": 35,
+        "hamilton": 190
+      }
+    },
+    "precheck_undecided": {
+      "n": 1446,
+      "reference": {
+        "majority": {
+          "routable_bacc": 0.5,
+          "routable_auc": NaN,
+          "hamilton_bacc": 0.5,
+          "hamilton_auc": NaN,
+          "failure_acc": 0.32088520055325037,
+          "failure_f1": 0.09717277486910995,
+          "cost_rho": NaN,
+          "cost_rho_within": NaN,
+          "cost_mae": NaN,
+          "n": 1446.0
+        },
+        "precheck-rule": {
+          "routable_bacc": 0.7506224066390041,
+          "routable_auc": 0.7506224066390041,
+          "hamilton_bacc": 0.4458700171191,
+          "hamilton_auc": 0.4458700171191,
+          "failure_acc": NaN,
+          "failure_f1": NaN,
+          "cost_rho": NaN,
+          "cost_rho_within": NaN,
+          "cost_mae": NaN,
+          "n": 1446.0
+        },
+        "size-only": {
+          "routable_bacc": NaN,
+          "routable_auc": NaN,
+          "hamilton_bacc": NaN,
+          "hamilton_auc": NaN,
+          "failure_acc": NaN,
+          "failure_f1": NaN,
+          "cost_rho": NaN,
+          "cost_rho_within": NaN,
+          "cost_mae": 2.6374166011810303,
+          "n": 1446.0
+        }
+      },
+      "results": {
+        "mlp-counts": {
+          "routable_bacc": {
+            "mean": 0.6786307053941909,
+            "std": 0.05248962655601663
+          },
+          "routable_auc": {
+            "mean": 0.8365128010881355,
+            "std": 0.03649214028684078
+          },
+          "hamilton_bacc": {
+            "mean": 0.7775449376375643,
+            "std": 0.0007749449743213455
+          },
+          "hamilton_auc": {
+            "mean": 0.8646062606994376,
+            "std": 0.0160155294693079
+          },
+          "failure_acc": {
+            "mean": 0.5380359612724759,
+            "std": 0.01521438450899032
+          },
+          "failure_f1": {
+            "mean": 0.4638046792228442,
+            "std": 0.005249076927772073
+          },
+          "cost_rho": {
+            "mean": -0.11037286225581418,
+            "std": 0.029559268682432874
+          },
+          "cost_rho_within": {
+            "mean": -0.11037286225581418,
+            "std": 0.029559268682432874
+          },
+          "cost_mae": {
+            "mean": 6.594770669937134,
+            "std": 0.3178374767303467
+          }
+        },
+        "mlp-rules": {
+          "routable_bacc": {
+            "mean": 0.6578838174273859,
+            "std": 0.0056016597510373245
+          },
+          "routable_auc": {
+            "mean": 0.8262288872436769,
+            "std": 0.009639985537439055
+          },
+          "hamilton_bacc": {
+            "mean": 0.6751413854243091,
+            "std": 0.01568002567865001
+          },
+          "hamilton_auc": {
+            "mean": 0.8375252201027146,
+            "std": 0.0015781670335045517
+          },
+          "failure_acc": {
+            "mean": 0.518326417704011,
+            "std": 0.014177040110650074
+          },
+          "failure_f1": {
+            "mean": 0.45158282652599846,
+            "std": 0.012451382147177725
+          },
+          "cost_rho": {
+            "mean": -0.26171396499898353,
+            "std": 0.029274945592607696
+          },
+          "cost_rho_within": {
+            "mean": -0.26171396499898353,
+            "std": 0.029274945592607696
+          },
+          "cost_mae": {
+            "mean": 7.267766952514648,
+            "std": 0.3817601203918457
+          }
+        },
+        "gnn-structure": {
+          "routable_bacc": {
+            "mean": 0.7786307053941909,
+            "std": 0.009751037344398417
+          },
+          "routable_auc": {
+            "mean": 0.916860935589952,
+            "std": 0.02231022193144061
+          },
+          "hamilton_bacc": {
+            "mean": 0.7624946502812424,
+            "std": 0.002108553436047933
+          },
+          "hamilton_auc": {
+            "mean": 0.8875848312545855,
+            "std": 0.015096142088530218
+          },
+          "failure_acc": {
+            "mean": 0.6016597510373444,
+            "std": 0.0020746887966804906
+          },
+          "failure_f1": {
+            "mean": 0.5477769097368466,
+            "std": 0.0006119548268301855
+          },
+          "cost_rho": {
+            "mean": 0.10198449771582528,
+            "std": 0.08848336784313858
+          },
+          "cost_rho_within": {
+            "mean": 0.10198449771582528,
+            "std": 0.08848336784313858
+          },
+          "cost_mae": {
+            "mean": 4.98456597328186,
+            "std": 0.26940464973449707
+          }
+        },
+        "gnn-rules": {
+          "routable_bacc": {
+            "mean": 0.7614107883817428,
+            "std": 0.03319502074688796
+          },
+          "routable_auc": {
+            "mean": 0.923563643876655,
+            "std": 0.033262168351095855
+          },
+          "hamilton_bacc": {
+            "mean": 0.7434496515040352,
+            "std": 0.03504600758131571
+          },
+          "hamilton_auc": {
+            "mean": 0.9180904561017365,
+            "std": 0.01726048544876496
+          },
+          "failure_acc": {
+            "mean": 0.5791839557399723,
+            "std": 0.004495159059474452
+          },
+          "failure_f1": {
+            "mean": 0.5275652023936948,
+            "std": 0.005707004153949036
+          },
+          "cost_rho": {
+            "mean": -0.10596188155166492,
+            "std": 0.014872031391037335
+          },
+          "cost_rho_within": {
+            "mean": -0.10596188155166492,
+            "std": 0.014872031391037335
+          },
+          "cost_mae": {
+            "mean": 6.628620624542236,
+            "std": 0.535947322845459
+          }
+        }
+      },
+      "class_f1": {
+        "mlp-counts": {
+          "none": 0.48867521367521366,
+          "hamilton": 0.6778278131871,
+          "timeout": 0.0,
+          "staple_routing": 0.521186880891832,
+          "scaffold_length": 0.6313334883600754
+        },
+        "mlp-rules": {
+          "none": 0.4930939226519337,
+          "hamilton": 0.5604919427163235,
+          "timeout": 0.0,
+          "staple_routing": 0.5893008295242932,
+          "scaffold_length": 0.615027437737442
+        },
+        "gnn-structure": {
+          "none": 0.6764553230360405,
+          "hamilton": 0.6617470430308622,
+          "timeout": 0.0,
+          "staple_routing": 0.7945559233985693,
+          "scaffold_length": 0.6061262592187608
+        },
+        "gnn-rules": {
+          "none": 0.6635724157848053,
+          "hamilton": 0.651202493480457,
+          "timeout": 0.0,
+          "staple_routing": 0.7437150837988826,
+          "scaffold_length": 0.5793360189043285
+        }
+      },
+      "class_support": {
+        "none": 241,
+        "hamilton": 464,
+        "timeout": 277,
+        "staple_routing": 178,
+        "scaffold_length": 286
+      }
+    }
+  }
+}

@@ -33,10 +33,13 @@ CAD geometry → heterogeneous graph → GNN → risk prediction → route or no
   `baseline_v1_rare.json` (with the oversampled supplement in training), both
   sliced by whether the precheck had already decided the design. See
   **The surrogate** below.
-- Next milestone: extrapolation. Every number so far comes from a random split,
-  so the test designs are the same *kind* of thing as the training ones.
-  `--split shape:<name>` and `--split size:<q>` hold out a region instead, which
-  is what separates a surrogate from a curve fit.
+- Extrapolation (`results/holdout_shape_*.json`, `results/size_extrapolation_q80.json`):
+  held out a whole shape family, or every design larger than anything trained
+  on. Both MLP configurations end up *below* the precheck baseline they were
+  meant to beat; the GNNs keep a much reduced edge. See **Extrapolation** below.
+- Next milestone: recover the extrapolation loss. AUC survives the shift far
+  better than balanced accuracy, so start with threshold calibration on the
+  target regime before touching the architecture.
 
 ## Pipeline
 
@@ -340,6 +343,56 @@ by +0.16 and left `gnn-rules` where it was. Since the supplement cannot enter
 the test set, none of this makes the *measurement* of a thin class more precise;
 the support column stays at 40 and 44 either way. Buying that would mean a
 larger iid draw, not a bigger supplement.
+
+### Extrapolation: is this a surrogate or a curve fit?
+
+Every number above comes from a random split, so the test designs are the same
+*kind* of thing as the training ones. `--split shape:<name>` trains on three
+shape families and tests on the fourth; `--split size:0.8` trains on designs of
+at most 24 cylinders and tests on 25 to 72. 2 seeds, 20 epochs, iid data only.
+Sources: `results/holdout_shape_*.json`, `results/size_extrapolation_q80.json`.
+
+Routable balanced accuracy, precheck-undecided slice:
+
+| split | n | `precheck-rule` | `mlp-counts` | `mlp-rules` | `gnn-structure` | `gnn-rules` |
+|---|---|---|---|---|---|---|
+| random | 980 | 0.640 | 0.931 | 0.943 | 0.966 | **0.977** |
+| hold out `brick` | 1085 | 0.722 | 0.613 | 0.711 | 0.799 | **0.835** |
+| hold out `plate` | 940 | 0.797 | 0.683 | 0.720 | 0.814 | **0.869** |
+| hold out `polygon_ring` | 2437 | 0.577 | 0.603 | 0.580 | 0.697 | **0.838** |
+| hold out `polyhedron` | 2085 | 0.646 | 0.795 | 0.647 | **0.787** | 0.760 |
+| size 25-72, trained on <= 24 | 1446 | 0.751 | 0.679 | 0.658 | **0.779** | 0.761 |
+| **mean of the five shifts** | | **0.699** | **0.675** | **0.663** | **0.775** | **0.813** |
+
+Margin over the rule baseline, in-distribution versus shifted:
+
+| | `mlp-counts` | `mlp-rules` | `gnn-structure` | `gnn-rules` |
+|---|---|---|---|---|
+| random split | +0.291 | +0.303 | +0.326 | +0.337 |
+| mean of five shifts | **-0.024** | **-0.035** | +0.077 | +0.114 |
+
+**Both MLPs end up below the precheck they were supposed to beat.** Averaged
+over the five shifts they are worse than running `precheck.py` and calling
+everything else routable -- a surrogate that costs a GPU and loses to a page of
+graph theory. Only the message-passing models keep an edge, and it shrinks from
++0.33 to +0.08 / +0.11.
+
+The failure head transfers worst of all: macro F1 falls from 0.96 to 0.16-0.65,
+and on the `polyhedron` holdout `timeout` F1 is **0.000 for all four models**
+with 254 test examples. It had learned shape-conditional cues, not the
+mechanism.
+
+One thing that does survive: **ranking degrades far less than thresholding**.
+`gnn-structure` on the size split is 0.779 balanced accuracy but **0.917 AUC**;
+`gnn-rules` on `polygon_ring` is 0.838 at **0.934 AUC**. The ordering is largely
+intact and the 0.5 threshold is not, which is a calibration failure on
+out-of-range designs rather than an absence of signal -- and calibration is
+refittable on a handful of labelled designs from the target regime, which is
+the cheap fix worth trying before anything architectural.
+
+Honest summary: **inside the sampled design space this is a good surrogate;
+across shape families or across scale it is closer to a curve fit**, and the
+graph structure is what separates "degrades" from "collapses".
 
 ## Sampling and the thin classes
 

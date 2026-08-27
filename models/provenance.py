@@ -33,15 +33,23 @@ def _run(*args: str) -> str | None:
 
 
 def git_state() -> dict[str, Any]:
-    """Commit, branch, and whether the tree had uncommitted changes."""
+    """Commit, branch, and how the tree differed from it.
+
+    `dirty` counts *tracked* modifications -- code that ran but is not in any
+    commit, which is what invalidates the stamp.  Untracked files are counted
+    separately: a directory of results sitting unadded says nothing about which
+    code produced the table, and reporting it as "dirty" cries wolf.
+    """
     head = _run("git", "rev-parse", "HEAD")
     status = _run("git", "status", "--porcelain")
+    lines = [] if not status else status.splitlines()
     return {
         "commit": head,
         "branch": _run("git", "rev-parse", "--abbrev-ref", "HEAD"),
         "describe": _run("git", "describe", "--always", "--dirty"),
         # None means git did not answer, which is not the same as "clean"
-        "dirty": None if status is None else bool(status),
+        "dirty": None if status is None else any(not ln.startswith("??") for ln in lines),
+        "untracked": None if status is None else sum(ln.startswith("??") for ln in lines),
     }
 
 
